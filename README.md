@@ -17,14 +17,16 @@ files are fetched from the dataset's Git LFS media endpoint into `data/raw/IO-VN
 
 ## Current state
 
-Phases 1–13 are implemented through native Android heading correction. The complete estimator now
+Phases 1–14 are implemented through field-derived Android robustness. The complete estimator now
 runs in the Android app and matches the Python reference below 0.1 m on three replay routes
 across two drivers. A full-loop benchmark screen exercises 100 Hz callback overhead, online
 calibration, TCN, ES-EKF, blackout management and display smoothing. Physical-device Gate 5
 is closed on a V2422 ARM64 phone (0.177 ms p95 against a 100 ms budget). The first controlled
-60-second field outage completed and recovered but measured 51.5% drift; its heading failure
-is corrected in Phase 13, with a saved-log counterfactual of 7.2%. **One physical repeat with
-the corrected APK remains open.** See
+60-second field outage completed and recovered at 19.2% drift; a later run regressed to 114.0%
+when aided course updates corrupted the live gyro-bias state. A following session exposed an
+unrelated projected-calibration gate and a NaN MapLibre crash. Phase 14 fixes all three causes
+and adds direct live bias/scale diagnostics. **One physical repeat with the corrected APK
+remains open.** See
 `docs/phase8_real_device_validation.md` for the field protocol and acceptance criteria.
 
 Phase 10 retrained with the corrected representative validation split. It improved median
@@ -92,7 +94,7 @@ headroom that is already there.
 
 `mobile/` holds the Android logger, complete navigation UI, Google/MapLibre/PMTiles basemaps,
 replay fallback, automatic live-session evidence recorder and full-loop benchmark. It
-**builds and passes 15/15 tests on a physical Android 16 ARM64 V2422 and emulator**, including the bundled
+**builds and passes 18/18 tests on a physical Android 16 ARM64 V2422**, including the bundled
 Greater Noida offline-map integrity check; desktop/Android parity is below 0.1 m on three
 routes across two drivers.
 
@@ -125,6 +127,7 @@ remaining field gate is empirical execution of that controlled test on the vehic
 - `docs/phase11_live_field_recording.md` — one-button raw, estimator and summary evidence
 - `docs/phase12_controlled_field_blackout.md` — scored live GNSS withholding and calibration gate
 - `docs/phase13_native_heading.md` — full-rate Android yaw, tilt-safe projection and field regression
+- `docs/phase14_field_robustness.md` — field crash, calibration-tie and gyro-state corrections
 - `outputs/` — plots, metrics, checkpoints, inventories (gitignored)
 
 ## Non-obvious things the audit established

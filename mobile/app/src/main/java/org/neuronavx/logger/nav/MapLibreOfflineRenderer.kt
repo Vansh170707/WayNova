@@ -177,17 +177,12 @@ class MapLibreOfflineRenderer(
 
     private fun draw(snapshot: NavigationMapSnapshot) {
         val style = style ?: return
-        if (!snapshot.originLat.isFinite() || !snapshot.originLon.isFinite() ||
-            !snapshot.markerEast.isFinite() || !snapshot.markerNorth.isFinite()) return
-
-        val marker = projected(
-            snapshot.originLat, snapshot.originLon, snapshot.markerEast, snapshot.markerNorth
-        )
-        val covered = marker.latitude in SOUTH..NORTH && marker.longitude in WEST..EAST
-        if (covered != lastCoverage) {
-            lastCoverage = covered
-            onCoverageChanged(covered)
+        val marker = offlineMapMarkerOrNull(snapshot) ?: run {
+            updateCoverage(false)
+            return
         }
+        val covered = marker.latitude in SOUTH..NORTH && marker.longitude in WEST..EAST
+        updateCoverage(covered)
         if (!covered) return
 
         rawSource?.setGeoJson(lineFeature(projectPath(
@@ -263,10 +258,14 @@ class MapLibreOfflineRenderer(
     }
 
     fun covers(snapshot: NavigationMapSnapshot): Boolean {
-        val marker = projected(
-            snapshot.originLat, snapshot.originLon, snapshot.markerEast, snapshot.markerNorth
-        )
+        val marker = offlineMapMarkerOrNull(snapshot) ?: return false
         return marker.latitude in SOUTH..NORTH && marker.longitude in WEST..EAST
+    }
+
+    private fun updateCoverage(covered: Boolean) {
+        if (covered == lastCoverage) return
+        lastCoverage = covered
+        onCoverageChanged(covered)
     }
 
     private data class RouteSegment(val dark: Boolean, val points: List<LatLng>)
@@ -420,4 +419,23 @@ class MapLibreOfflineRenderer(
         val AIDED_COLOR = Color.parseColor("#4C9BFF")
         val DENIED_COLOR = Color.parseColor("#FF9F4A")
     }
+}
+
+/**
+ * Convert a snapshot marker only after validating every value MapLibre's [LatLng] requires.
+ *
+ * Calibration states deliberately carry no local position. The map-source button can still
+ * be pressed in that state, so this boundary must return null instead of passing NaN into
+ * MapLibre and killing the live recorder before it writes its summary.
+ */
+internal fun offlineMapMarkerOrNull(snapshot: NavigationMapSnapshot): LatLng? {
+    if (!snapshot.originLat.isFinite() || snapshot.originLat !in -90.0..90.0 ||
+        !snapshot.originLon.isFinite() ||
+        !snapshot.markerEast.isFinite() || !snapshot.markerNorth.isFinite()) return null
+    val point = EnuMapProjection.toLatLng(
+        snapshot.originLat, snapshot.originLon, snapshot.markerEast, snapshot.markerNorth,
+    )
+    if (!point.latitude.isFinite() || point.latitude !in -90.0..90.0 ||
+        !point.longitude.isFinite()) return null
+    return LatLng(point.latitude, point.longitude)
 }

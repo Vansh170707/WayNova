@@ -73,13 +73,26 @@ class Navigator(
         val gnssUpdates: Int, val rejectedFixes: Int,
         val gnssFixesReceived: Int,
         val gnssFixAgeS: Double,
+        val gyroBiasRadS: Double,
+        val gyroScaleError: Double,
         val headingRateSource: HeadingRateSource,
     )
 
-    private val ekf = EsEkf(ekfConfig)
+    private val nativeHeadingContract = inputRateHz > runtime.rateHz * 1.5
+    /**
+     * Gravity projection already has unit gain and online calibration has estimated its
+     * additive bias. Letting a few aided course updates rewrite those parameters turned a
+     * good field heading into 145 degrees of error during the next 60-second outage.
+     */
+    private val effectiveEkfConfig = if (nativeHeadingContract) ekfConfig.copy(
+        estimateGyroBias = false,
+        estimateGyroScale = false,
+        courseMinSpeed = maxOf(ekfConfig.courseMinSpeed, LIVE_COURSE_MIN_SPEED_MS),
+    ) else ekfConfig
+    private val ekf = EsEkf(effectiveEkfConfig)
     private val calibration = OnlineCalibration(
-        minSpeedForYaw = if (inputRateHz > runtime.rateHz * 1.5) 2.0 else 8.0,
-        useGravityProjectedYaw = inputRateHz > runtime.rateHz * 1.5,
+        minSpeedForYaw = if (nativeHeadingContract) 2.0 else 8.0,
+        useGravityProjectedYaw = nativeHeadingContract,
     )
     private val blackout = BlackoutManager(blackoutConfig)
     private val smoother = TrackSmoother(blackoutConfig)
@@ -100,7 +113,7 @@ class Navigator(
         Math.round(inputRateHz / runtime.rateHz).toInt().coerceAtLeast(1)
     // Production live input is 100 Hz while the replay contract is already 10 Hz. The
     // latter comes from IO-VNBD, whose gravity/gyro columns are not in a common axis order.
-    private var headingRateSource = if (inputRateHz > runtime.rateHz * 1.5)
+    private var headingRateSource = if (nativeHeadingContract)
         HeadingRateSource.GRAVITY_PROJECTED else HeadingRateSource.CALIBRATED_CHANNEL
     private var sampleIndex = -1
     private var lastEmitT = Double.NaN
@@ -217,7 +230,11 @@ class Navigator(
             justInitialized = true
         }
 
-        window.push(accel, gravity, gyro, a)
+        window.push(
+            accel, gravity, gyro, a,
+            nativeYawRate = if (headingRateSource == HeadingRateSource.GRAVITY_PROJECTED)
+                projectedHeadingRate else Double.NaN,
+        )
 
         val inOutage = blackout.mode != NavMode.AIDED
         // While dark, speed is carried by the learned estimate rather than by integrating
@@ -257,7 +274,10 @@ class Navigator(
                 ekf.updateGnssSpeed(navigationFix.speed)
                 if (navigationFix.speed < ekf.config.zuptSpeed) ekf.updateZeroVelocity()
             }
-            if (navigationFix != null && navigationFix.bearingDeg.isFinite()) {
+            val courseUsable = navigationFix != null && navigationFix.bearingDeg.isFinite() &&
+                (!nativeHeadingContract || navigationFix.speed.isFinite() &&
+                    navigationFix.speed >= ekf.config.courseMinSpeed)
+            if (courseUsable) {
                 val sigma = if (navigationFix.bearingAccuracyDeg.isFinite())
                     Math.toRadians(navigationFix.bearingAccuracyDeg) else ekf.config.sigmaGnssCourse
                 ekf.updateGnssBearing(Math.toRadians(navigationFix.bearingDeg), sigma)
@@ -281,6 +301,8 @@ class Navigator(
             gnssUpdates = fusedGnssFixes, rejectedFixes = ekf.rejected,
             gnssFixesReceived = gnssFixesReceived,
             gnssFixAgeS = maxOf(t - lastGnssFixT, 0.0),
+            gyroBiasRadS = ekf.gyroBias,
+            gyroScaleError = ekf.gyroScaleError,
             headingRateSource = headingRateSource,
         )
         state = s
@@ -305,6 +327,8 @@ class Navigator(
             gnssFixesReceived = gnssFixesReceived,
             gnssFixAgeS = if (lastGnssFixT.isFinite()) maxOf(t - lastGnssFixT, 0.0)
                 else Double.POSITIVE_INFINITY,
+            gyroBiasRadS = Double.NaN,
+            gyroScaleError = Double.NaN,
             headingRateSource = headingRateSource,
         )
         state = s
@@ -325,5 +349,9 @@ class Navigator(
         val east = Math.toRadians(lon - originLon) * a * cos(Math.toRadians(originLat))
         val north = Math.toRadians(lat - originLat) * a
         return Pair(east, north)
+    }
+
+    private companion object {
+        const val LIVE_COURSE_MIN_SPEED_MS = 5.0
     }
 }

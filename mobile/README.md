@@ -13,13 +13,11 @@ Three deployment jobs:
 3. **Benchmark the full navigation loop on real hardware** — the measurement needed to
    close the blueprint's edge acceptance gate.
 
-> **Status: the Phase 13 build passed 15/15 tests on a physical Android 16 ARM64 V2422 and emulator; the
-> Phase 12 controlled-outage build passes 13/13 on the Android 16 emulator and awaits the
-> next physical-phone install.**
+> **Status: the Phase 14 build passes 18/18 tests on a physical Android 16 ARM64 V2422.**
 > Android/Desktop parity is verified below 0.1 m on three routes across two drivers, and the
 > full loop measured 0.177 ms p95 against its 100 ms budget. Live navigation has been driven;
-> a GNSS/decimator handoff defect found by that drive is fixed and regression-tested. The
-> corrected own-vehicle evidence drive remains open.
+> field-derived MapLibre, projected-calibration and native gyro-state failures are fixed and
+> regression-tested. The corrected own-vehicle evidence repeat remains open.
 
 ## Build
 
@@ -74,7 +72,7 @@ $SDK/cmdline-tools/latest/bin/avdmanager create avd -n neuronavx \
 $SDK/emulator/emulator -avd neuronavx -no-window -no-audio -gpu swiftshader_indirect &
 adb wait-for-device
 
-cd mobile && ./gradlew connectedDebugAndroidTest     # 15 on-device tests
+cd mobile && ./gradlew connectedDebugAndroidTest     # 18 on-device tests
 ```
 
 To exercise the logger without driving, feed the emulator mock fixes:
@@ -118,6 +116,10 @@ Each navigation session writes `nav_drive_<timestamp>.csv` (replay-compatible ra
 `nav_summary_<timestamp>.json` (health and calibration summary). `./pull_drives.sh` pulls
 all of them, audits only the raw drive files, and generates the Phase 9 evidence package.
 The original **Start logging** screen remains available for a raw-only collection.
+
+Phase 14 diagnostics include the live `ekf_gyro_bias_rads` and
+`ekf_gyro_scale_error`. On the native gravity-projected path these must remain equal to the
+calibrated bias and zero respectively throughout a controlled outage.
 
 Airplane mode is an offline-connectivity test, not a GNSS-denied test: modern Android phones
 normally keep satellite reception active. Android's master **Location** switch disables GPS,

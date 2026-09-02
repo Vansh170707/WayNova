@@ -37,7 +37,8 @@ data class LiveSessionSummary(
 class LiveNavigationRecorder(private val context: Context) {
     companion object {
         const val DIAGNOSTICS_HEADER =
-            "timestamp_ms,phase,mode,heading_rate_source,east_m,north_m," +
+            "timestamp_ms,phase,mode,heading_rate_source,ekf_gyro_bias_rads," +
+                "ekf_gyro_scale_error,east_m,north_m," +
                 "display_east_m,display_north_m," +
                 "heading_deg,speed_ms,sigma_m,blackout_s,blackout_distance_m," +
                 "learned_speed_ms,learned_sigma_ms,phone_fixes,fused_fixes," +
@@ -136,6 +137,8 @@ class LiveNavigationRecorder(private val context: Context) {
             state.phase.name,
             state.mode.name,
             state.headingRateSource.name,
+            fmt(state.gyroBiasRadS),
+            fmt(state.gyroScaleError),
             fmt(state.east),
             fmt(state.north),
             fmt(state.displayEast),
@@ -250,6 +253,8 @@ class LiveNavigationRecorder(private val context: Context) {
             put("final_phase", end?.phase?.name ?: JSONObject.NULL)
             put("final_mode", end?.mode?.name ?: JSONObject.NULL)
             put("heading_rate_source", end?.headingRateSource?.name ?: JSONObject.NULL)
+            putFinite("final_ekf_gyro_bias_rad_s", end?.gyroBiasRadS ?: Double.NaN)
+            putFinite("final_ekf_gyro_scale_error", end?.gyroScaleError ?: Double.NaN)
             put("calibration", if (calibration == null) JSONObject.NULL else JSONObject().apply {
                 put("forward_angle_deg", Math.toDegrees(calibration.forwardAngleRad))
                 put("forward_accel_scale", calibration.forwardAccelScale)

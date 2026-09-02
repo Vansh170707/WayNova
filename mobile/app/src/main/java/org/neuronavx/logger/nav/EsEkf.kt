@@ -33,6 +33,7 @@ class EsEkf(val config: Config = Config()) {
         val sigmaAccel: Double = 0.6,
         val sigmaGyro: Double = 0.02,
         val sigmaGyroBias: Double = 2e-4,
+        val estimateGyroBias: Boolean = true,
         val sigmaSpeedProcess: Double = 0.4,
         // yaw scale factor
         val estimateGyroScale: Boolean = true,
@@ -94,7 +95,7 @@ class EsEkf(val config: Config = Config()) {
         p[PE][PE] = 9.0; p[PN][PN] = 9.0
         p[PSI][PSI] = 0.2 * 0.2
         p[V][V] = 1.0
-        p[BW][BW] = 1e-4
+        p[BW][BW] = if (config.estimateGyroBias) 1e-4 else 0.0
         p[SW][SW] = if (config.estimateGyroScale) config.sigmaGyroScale * config.sigmaGyroScale else 0.0
         rejected = 0; updates = 0; resets = 0; consecutiveRejects = 0
     }
@@ -118,7 +119,7 @@ class EsEkf(val config: Config = Config()) {
         f[PE][V] = sinPsi * dt
         f[PN][PSI] = -v * sinPsi * dt
         f[PN][V] = cosPsi * dt
-        f[PSI][BW] = -(1.0 + sw) * dt
+        if (c.estimateGyroBias) f[PSI][BW] = -(1.0 + sw) * dt
         if (c.estimateGyroScale) f[PSI][SW] = wDebiased * dt
 
         val rateNoise = if (c.estimateGyroScale) c.sigmaGyroRateNoise else 0.0
@@ -127,7 +128,7 @@ class EsEkf(val config: Config = Config()) {
         q[PN] = q[PE]
         q[PSI] = (c.sigmaGyro * c.sigmaGyro + (rateNoise * abs(wDebiased)).let { it * it }) * dt
         q[V] = (c.sigmaAccel * dt).let { it * it } + c.sigmaSpeedProcess * c.sigmaSpeedProcess * dt
-        q[BW] = c.sigmaGyroBias * c.sigmaGyroBias * dt
+        q[BW] = if (c.estimateGyroBias) c.sigmaGyroBias * c.sigmaGyroBias * dt else 0.0
         q[SW] = if (c.estimateGyroScale) c.sigmaGyroScaleWalk * c.sigmaGyroScaleWalk * dt else 0.0
 
         // P = F P F^T + Q

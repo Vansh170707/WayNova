@@ -22,6 +22,8 @@ import org.neuronavx.logger.nav.SpeedModel
 import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.hypot
+import kotlin.math.sin
+import kotlin.math.sqrt
 
 /**
  * The Android estimator is a second implementation of a pipeline that already works on the
@@ -430,6 +432,75 @@ class NavigationParityTest {
         )
     }
 
+    /**
+     * Aided course is allowed to correct heading, but it must not turn a short mismatch
+     * between phone rotation and vehicle course into a permanent gyro bias/scale change.
+     * The September field run began its outage correctly and ended 145 degrees wrong after
+     * this hidden state escaped the calibration bounds.
+     */
+    @Test
+    fun nativeHeadingKeepsCalibratedBiasAndUnitScale() {
+        val runtime = RuntimeConfig.fromAsset(context)
+        val gravity = doubleArrayOf(0.0, 0.0, 9.80665)
+        val accel = gravity.copyOf()
+        val calibratedBias = 0.01
+        val navigator = Navigator(runtime, model = null, inputRateHz = 100.0).apply {
+            overrideCalibration(
+                Alignment(
+                    forwardAngleRad = 0.0,
+                    forwardAccelScale = 1.0,
+                    gyroBiasRadS = calibratedBias,
+                    yawChannel = 2,
+                    yawScale = -1.0,
+                    forwardAccelCorr = 1.0,
+                    yawCorr = 1.0,
+                    samples = 1_000,
+                    baselines = 1_000,
+                ),
+                source = HeadingRateSource.GRAVITY_PROJECTED,
+            )
+        }
+
+        var atLastFix: Navigator.State? = null
+        var end: Navigator.State? = null
+        for (callback in 0..3_500) {
+            val t = callback / 100.0
+            // Projection returns +calibratedBias, so fixed-bias propagation is stationary.
+            val gyro = doubleArrayOf(0.0, 0.0, -calibratedBias)
+            val fix = if (callback <= 1_500 && callback % 100 == 0) {
+                val second = callback / 100
+                GnssFix(
+                    lat = 28.45,
+                    lon = 77.50,
+                    alt = 0.0,
+                    speed = 10.0,
+                    accuracyM = 3.0,
+                    // Deliberately disagrees with the fixed phone gyro by 5 deg/s.
+                    bearingDeg = second * 5.0,
+                    bearingAccuracyDeg = 2.0,
+                )
+            } else null
+            navigator.addSample(t, accel, gravity, gyro, fix)?.let { state ->
+                if (callback == 1_500) atLastFix = state
+                end = state
+            }
+        }
+
+        val aided = atLastFix ?: error("no state at the final aided fix")
+        val dark = end ?: error("no final native state")
+        assertEquals(calibratedBias, aided.gyroBiasRadS, 1e-12)
+        assertEquals(calibratedBias, dark.gyroBiasRadS, 1e-12)
+        assertEquals(0.0, aided.gyroScaleError, 1e-12)
+        assertEquals(0.0, dark.gyroScaleError, 1e-12)
+        val darkHeadingError = abs(
+            org.neuronavx.logger.nav.Signals.wrapAngle(dark.heading - aided.heading)
+        )
+        assertTrue(
+            "fixed native heading drifted ${Math.toDegrees(darkHeadingError)} deg after aiding",
+            Math.toDegrees(darkHeadingError) < 0.5,
+        )
+    }
+
     @Test
     fun gravityProjectedYawSurvivesPhoneTilt() {
         val trueYawRate = 0.2
@@ -448,6 +519,64 @@ class NavigationParityTest {
                 1e-9,
             )
         }
+    }
+
+    /**
+     * With a tilted phone, two raw gyro axes can be equally good descriptions of the turn.
+     * Live Android does not need to choose between them because gravity projection combines
+     * them physically; a raw-axis winner-margin gate must therefore not block calibration.
+     */
+    @Test
+    fun gravityProjectedCalibrationIgnoresRawAxisTie() {
+        val calibration = OnlineCalibration(useGravityProjectedYaw = true)
+        calibration.setRate(100.0)
+        val rootHalf = sqrt(0.5)
+        val up = doubleArrayOf(0.0, rootHalf, rootHalf)
+        val gravity = DoubleArray(3) { up[it] * 9.80665 }
+        val projectedBias = 0.002
+        var trueHeading = 0.0
+        var previousFixSpeed = Double.NaN
+        var heldForwardAcceleration = 0.0
+
+        for (callback in 0..13_000) {
+            val t = callback / 100.0
+            if (callback % 100 == 0) {
+                val speed = 10.0 + 2.0 * sin(t / 8.0)
+                if (previousFixSpeed.isFinite()) {
+                    heldForwardAcceleration = speed - previousFixSpeed
+                }
+                previousFixSpeed = speed
+                calibration.addFix(t, speed, trueHeading)
+            }
+
+            val trueYawRate = 0.08 * sin(t / 5.0) + 0.03 * cos(t / 11.0)
+            val measured = trueYawRate + projectedBias
+            // gy and gz are identical, so their raw correlations tie exactly.
+            val gyro = DoubleArray(3) { -measured * up[it] }
+            val lateralAcceleration = 0.4 * sin(t / 3.0)
+            val accel = gravity.copyOf().also {
+                it[0] += heldForwardAcceleration
+                // e2 = up x device-X = (0, +sqrt(1/2), -sqrt(1/2)). A small
+                // independent lateral signal keeps the 2-D forward fit non-degenerate.
+                it[1] += lateralAcceleration * rootHalf
+                it[2] -= lateralAcceleration * rootHalf
+            }
+            calibration.addImu(t, accel, gravity, gyro)
+            trueHeading = org.neuronavx.logger.nav.Signals.wrapAngle(
+                trueHeading + trueYawRate / 100.0
+            )
+        }
+
+        val solved = calibration.solve()
+        assertTrue(
+            "projected calibration rejected a raw-axis tie " +
+                "(${calibration.yawBaselines} baselines; ${calibration.lastRejectionReason})",
+            solved != null,
+        )
+        val alignment = solved!!
+        assertTrue("projected yaw correlation ${alignment.yawCorr} is weak",
+            alignment.yawCorr > 0.95)
+        assertEquals(projectedBias, alignment.gyroBiasRadS, 5e-4)
     }
 
     /**

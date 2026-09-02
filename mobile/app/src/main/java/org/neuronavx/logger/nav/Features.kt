@@ -43,7 +43,13 @@ class FeatureWindow(private val windowSamples: Int) {
     }
 
     /** Compute one feature vector and append it to the window. */
-    fun push(accel: DoubleArray, gravity: DoubleArray, gyro: DoubleArray, align: Alignment) {
+    fun push(
+        accel: DoubleArray,
+        gravity: DoubleArray,
+        gyro: DoubleArray,
+        align: Alignment,
+        nativeYawRate: Double = Double.NaN,
+    ) {
         val h = DoubleArray(2)
         Signals.horizontalAcceleration(accel, gravity, h)
         val c = cos(align.forwardAngleRad)
@@ -54,7 +60,10 @@ class FeatureWindow(private val windowSamples: Int) {
         val aVertical = Signals.verticalAcceleration(accel, gravity)
         // the FEATURE is the scaled raw yaw rate, not the bias-corrected one the filter
         // propagates -- the network was trained on the former
-        val yaw = align.rawYawRate(gyro)
+        // Live Android already has the physically meaningful gravity-projected yaw rate.
+        // Requiring one raw axis here would reintroduce the phone-orientation ambiguity
+        // that projection removed. Replay keeps the trained selected-axis contract.
+        val yaw = if (nativeYawRate.isFinite()) nativeYawRate else align.rawYawRate(gyro)
         val horizMag = hypot(h[0], h[1])
 
         val norm = Signals.magnitude(accel)

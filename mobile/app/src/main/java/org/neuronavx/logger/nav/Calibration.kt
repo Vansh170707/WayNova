@@ -292,24 +292,12 @@ class OnlineCalibration(
                 }
             } else secondBestAbsCorr = maxOf(secondBestAbsCorr, abs(r))
         }
-        if (bestCh < 0) {
-            lastRejectionReason = "no usable yaw channel"
-            return null
-        }
-        val yawMargin = abs(bestCorr) - secondBestAbsCorr
-        if (!bestScale.isFinite() || !bestBias.isFinite() ||
-            abs(bestCorr) < minYawCorrelation || yawMargin < minYawWinnerMargin ||
-            abs(bestScale) < 0.05 || abs(bestScale) > 5.0 || abs(bestBias) > 0.02) {
-            lastRejectionReason = "ambiguous yaw fit (corr=$bestCorr, margin=$yawMargin, " +
-                "scale=$bestScale, bias=$bestBias)"
-            return null
-        }
-
         // Averaging yaw rate while stopped is the obvious estimator and a bad one: it
         // depends on a few hundred samples picked by a noisy speed threshold, and on one
         // segment returned 0.0198 rad/s against a true 0.0007 -- 136 deg of heading over a
         // two-minute outage. The baseline fit above uses thousands of samples of ordinary
         // driving instead, and is kept unless there were no baselines at all.
+        var reportedYawCorr = bestCorr
         val bias = if (useGravityProjectedYaw) {
             val nn = yn[PROJECTED_YAW].toDouble()
             val projectedCorr = correlation(
@@ -329,20 +317,46 @@ class OnlineCalibration(
                     "(corr=$projectedCorr, bias=$projectedBias)"
                 return null
             }
+            // Android gyro and gravity share a frame, so projection is the actual live
+            // heading channel. Two raw axes often tie when a phone is tilted: rejecting
+            // that harmless tie kept a field session at 99% despite projected corr=0.976.
+            // Keep the best raw channel only as a legacy diagnostic/model fallback.
+            reportedYawCorr = projectedCorr
             projectedBias
-        } else bestBias
+        } else {
+            if (bestCh < 0) {
+                lastRejectionReason = "no usable yaw channel"
+                return null
+            }
+            val yawMargin = abs(bestCorr) - secondBestAbsCorr
+            if (!bestScale.isFinite() || !bestBias.isFinite() ||
+                abs(bestCorr) < minYawCorrelation || yawMargin < minYawWinnerMargin ||
+                abs(bestScale) < 0.05 || abs(bestScale) > 5.0 || abs(bestBias) > 0.02) {
+                lastRejectionReason = "ambiguous yaw fit (corr=$bestCorr, margin=$yawMargin, " +
+                    "scale=$bestScale, bias=$bestBias)"
+                return null
+            }
+            bestBias
+        }
+
+        // A projected live solve no longer depends on any single raw axis. The chosen raw
+        // values remain finite for old feature/debug consumers, while Navigator supplies
+        // the projected rate directly to the live model window.
+        val reportedYawChannel = if (bestCh >= 0) bestCh else 0
+        val reportedYawScale = if (bestScale.isFinite()) bestScale else 1.0
 
         lastRejectionReason = null
         return Alignment(
             forwardAngleRad = angle,
             forwardAccelScale = scale,
             gyroBiasRadS = bias,
-            yawChannel = bestCh,
-            yawScale = bestScale,
+            yawChannel = reportedYawChannel,
+            yawScale = reportedYawScale,
             forwardAccelCorr = corr,
-            yawCorr = bestCorr,
+            yawCorr = reportedYawCorr,
             samples = n,
-            baselines = yn[bestCh],
+            baselines = if (useGravityProjectedYaw) yn[PROJECTED_YAW]
+                else yn[reportedYawChannel],
         )
     }
 
