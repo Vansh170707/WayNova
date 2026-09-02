@@ -1,0 +1,26 @@
+*.egg-info/
+*.pyc
+.DS_Store
+.env
+.env.*
+!.env.example
+.ipynb_checkpoints/
+.pytest_cache/
+__pycache__/
+data/processed/
+data/raw/
+envs/
+output/
+outputs/
+mobile/offline-maps/
+
+# Android/Gradle machine-local and generated files
+.gradle/
+.kotlin/
+**/build/
+**/local.properties
+.idea/
+
+# Signing credentials must never be committed
+*.jks
+*.keystore

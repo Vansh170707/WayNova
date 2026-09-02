@@ -1,0 +1,9 @@
+torch
+numpy
+pandas
+matplotlib
+scipy
+pyyaml
+tqdm
+notebook
+jupyterlab
