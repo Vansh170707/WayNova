@@ -13,12 +13,15 @@ import org.neuronavx.logger.nav.FieldBlackoutPhase
 import org.neuronavx.logger.nav.FieldBlackoutTest
 import org.neuronavx.logger.nav.GnssFix
 import org.neuronavx.logger.nav.HeadingRateSource
+import org.neuronavx.logger.nav.LiveSpeedAdapter
 import org.neuronavx.logger.nav.NavMode
 import org.neuronavx.logger.nav.Navigator
 import org.neuronavx.logger.nav.OnlineCalibration
 import org.neuronavx.logger.nav.ReplaySource
 import org.neuronavx.logger.nav.RuntimeConfig
+import org.neuronavx.logger.nav.SpeedEstimate
 import org.neuronavx.logger.nav.SpeedModel
+import org.neuronavx.logger.nav.SpeedPredictionModel
 import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.hypot
@@ -498,6 +501,116 @@ class NavigationParityTest {
         assertTrue(
             "fixed native heading drifted ${Math.toDegrees(darkHeadingError)} deg after aiding",
             Math.toDegrees(darkHeadingError) < 0.5,
+        )
+    }
+
+    @Test
+    fun liveSpeedAdapterRemovesAidedModelBias() {
+        val adapter = LiveSpeedAdapter()
+        val gnss = listOf(4.8, 5.1, 5.0, 5.2, 4.9, 5.0)
+        val raw = listOf(9.7, 10.1, 10.2, 10.0, 9.8, 10.1)
+        for (i in gnss.indices) {
+            adapter.observeTrustedSpeed(i.toDouble(), gnss[i], 3.0)
+            assertTrue(
+                adapter.observeAidedPrediction(SpeedEstimate(raw[i], 2.0), gnss[i], 3.0)
+            )
+        }
+
+        assertTrue("adapter did not earn calibration", adapter.isReady)
+        assertEquals(6, adapter.calibrationSamples)
+        assertEquals(5.0, adapter.biasMs, 0.25)
+        val corrected = adapter.adapt(7.0, SpeedEstimate(10.8, 2.0))
+        assertEquals("stable model bias was not removed", 5.8, corrected.speed, 0.35)
+        assertTrue("corrected uncertainty ignored the aided residual",
+            corrected.sigma >= adapter.residualSigmaMs)
+    }
+
+    @Test
+    fun liveSpeedAdapterFallsBackUntilReadyAndLimitsJumps() {
+        val fallback = LiveSpeedAdapter()
+        fallback.observeTrustedSpeed(0.0, 4.0, 3.0)
+        fallback.observeAidedPrediction(SpeedEstimate(14.0, 1.0), 4.0, 3.0)
+        val uncalibrated = fallback.adapt(1.0, SpeedEstimate(25.0, 1.0))
+        assertEquals("uncalibrated model replaced trusted speed", 4.0, uncalibrated.speed, 1e-9)
+        assertTrue("uncalibrated fallback is overconfident", uncalibrated.sigma >= 6.0)
+
+        val guarded = LiveSpeedAdapter()
+        repeat(5) { i ->
+            guarded.observeTrustedSpeed(i.toDouble(), 5.0, 3.0)
+            guarded.observeAidedPrediction(SpeedEstimate(10.0, 1.0), 5.0, 3.0)
+        }
+        val normal = guarded.adapt(5.0, SpeedEstimate(10.0, 1.0))
+        val jump = guarded.adapt(6.0, SpeedEstimate(30.0, 1.0))
+        assertEquals(5.0, normal.speed, 1e-9)
+        assertTrue("model jump exceeded the 3 m/s² acceleration guard",
+            jump.speed <= normal.speed + 3.0 + 1e-9)
+        assertTrue("clipped model jump did not increase uncertainty", jump.sigma >= 17.0)
+    }
+
+    /** Regression for the two September 3 drives: raw TCN speed was consistently +5 m/s. */
+    @Test
+    fun nativeNavigationCalibratesBiasedModelBeforeBlackout() {
+        val runtime = RuntimeConfig.fromAsset(context)
+        val biasedModel = SpeedPredictionModel { SpeedEstimate(speed = 10.0, sigma = 2.0) }
+        val baseLat = 28.45
+        val baseLon = 77.50
+        val earthRadiusM = 6_378_137.0
+        val trueSpeed = 5.0
+        val gravity = doubleArrayOf(0.0, 0.0, 9.80665)
+        val navigator = Navigator(
+            runtime,
+            model = biasedModel,
+            inputRateHz = 100.0,
+        ).apply {
+            overrideCalibration(
+                Alignment(
+                    forwardAngleRad = 0.0,
+                    forwardAccelScale = 1.0,
+                    gyroBiasRadS = 0.0,
+                    yawChannel = 2,
+                    yawScale = -1.0,
+                    forwardAccelCorr = 1.0,
+                    yawCorr = 1.0,
+                    samples = 1_000,
+                    baselines = 1_000,
+                ),
+                source = HeadingRateSource.GRAVITY_PROJECTED,
+            )
+        }
+
+        var end: Navigator.State? = null
+        for (callback in 0..7_500) {
+            val t = callback / 100.0
+            val fix = if (callback <= 1_200 && callback % 100 == 0) GnssFix(
+                lat = baseLat + Math.toDegrees(trueSpeed * t / earthRadiusM),
+                lon = baseLon,
+                alt = 0.0,
+                speed = trueSpeed,
+                accuracyM = 3.0,
+                bearingDeg = 0.0,
+                bearingAccuracyDeg = 2.0,
+            ) else null
+            navigator.addSample(
+                t,
+                gravity,
+                gravity,
+                doubleArrayOf(0.0, 0.0, 0.0),
+                fix,
+            )?.let { end = it }
+        }
+
+        val state = end ?: error("biased-model regression emitted no state")
+        assertEquals(NavMode.BLACKOUT, state.mode)
+        assertTrue("too few aided model/GNSS pairs: ${state.speedModelCalibrationSamples}",
+            state.speedModelCalibrationSamples >= 5)
+        assertEquals(5.0, state.speedModelBiasMs, 1e-9)
+        assertEquals(10.0, state.learnedSpeed, 1e-9)
+        assertEquals(5.0, state.adaptedSpeed, 1e-9)
+        assertEquals("biased learned speed leaked into the EKF", trueSpeed, state.speed, 0.2)
+        val expectedNorth = trueSpeed * state.t
+        assertTrue(
+            "bias-corrected blackout drifted ${abs(state.north - expectedNorth)} m",
+            abs(state.north - expectedNorth) < 10.0,
         )
     }
 

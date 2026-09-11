@@ -63,3 +63,34 @@ def test_completed_session_recognises_reacquiring_navigation_mode(tmp_path):
     assert report["completion_checks"]["mode_transitions_ok"]
     # Protocol completion and the accuracy threshold are deliberately independent.
     assert not report["under_10pct_candidate"]
+
+
+def test_reports_phase15_live_speed_adapter(tmp_path):
+    path = write_session(tmp_path, duration_s=6)
+    diagnostics_path = tmp_path / "nav_diagnostics_1.csv"
+    diagnostics = pd.read_csv(diagnostics_path)
+    diagnostics["learned_speed_ms"] = [None, 10, 10, 10, 10, 10]
+    diagnostics["adapted_speed_ms"] = [None, 5, 5, 5, 5, 5]
+    diagnostics["adapted_speed_sigma_ms"] = [None, 2, 2, 2, 2, 2]
+    diagnostics["speed_model_bias_ms"] = [None, 5, 5, 5, 5, 5]
+    diagnostics["speed_model_calibration_samples"] = [0, 6, 6, 6, 6, 6]
+    diagnostics.to_csv(diagnostics_path, index=False)
+
+    adapter = analyse_summary(path)["speed_model_adapter"]
+    assert adapter["ready"]
+    assert adapter["calibration_samples"] == 6
+    assert adapter["bias_ms"] == 5
+    assert adapter["raw_model_speed_mean_ms"] == 10
+    assert adapter["adapted_speed_mean_ms"] == 5
+
+
+def test_partial_low_drift_is_not_a_completed_pass(tmp_path):
+    path = write_session(tmp_path, phase="INTERRUPTED", duration_s=6)
+    data_path = tmp_path / "nav_diagnostics_1.csv"
+    data = pd.read_csv(data_path)
+    data["east_m"] = [0, 1, 11, 21, 31, 30]
+    data.to_csv(data_path, index=False)
+    report = analyse_summary(path)
+    assert report["under_10pct_candidate"]
+    assert not report["completed_under_10pct"]
+    assert report["status"] == "incomplete"

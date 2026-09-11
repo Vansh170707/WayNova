@@ -57,7 +57,9 @@ with tied raw axes, and adversarial aided course updates followed by a no-fix in
 three-route desktop parity checks below 0.1 m and the full-loop timing gate. All 56 Python
 tests pass (one optional map test skipped).
 
-The corrected APK still needs one controlled 60-second physical repeat. The acceptance gate
-remains successful `AIDED -> BLACKOUT -> REACQUIRING -> AIDED`, fixed native bias/scale in the
-new diagnostic columns, and incremental drift below 10%. If heading is stable but speed
-remains about 25–30% low, the next phase is aided phone-specific speed-affine calibration.
+Two corrected-APK repeats completed on 3 September. Both followed
+`AIDED -> BLACKOUT -> REACQUIRING -> AIDED`, recovered in about three seconds, retained fixed
+native bias/scale and held median heading error below five degrees. They therefore close the
+Phase 14 heading/crash/calibration checks. Their remaining 61% and 86% drift came from the
+TCN overestimating speed by about 4.5–5 m/s; Phase 15 addresses that separately with aided
+live speed adaptation.

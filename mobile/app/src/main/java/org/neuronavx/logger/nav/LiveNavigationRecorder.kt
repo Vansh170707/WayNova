@@ -41,12 +41,15 @@ class LiveNavigationRecorder(private val context: Context) {
                 "ekf_gyro_scale_error,east_m,north_m," +
                 "display_east_m,display_north_m," +
                 "heading_deg,speed_ms,sigma_m,blackout_s,blackout_distance_m," +
-                "learned_speed_ms,learned_sigma_ms,phone_fixes,fused_fixes," +
+                "learned_speed_ms,learned_sigma_ms,adapted_speed_ms," +
+                "adapted_speed_sigma_ms,speed_model_bias_ms," +
+                "speed_model_residual_sigma_ms,speed_model_calibration_samples," +
+                "phone_fixes,fused_fixes," +
                 "filter_rejects,gnss_age_s,cal_forward_deg,cal_accel_scale," +
                 "cal_gyro_bias_rads,cal_yaw_channel,cal_yaw_scale," +
                 "cal_forward_corr,cal_yaw_corr,test_phase,test_elapsed_s," +
                 "test_withheld_fixes,reference_east_m,reference_north_m," +
-                "reference_error_m"
+                "reference_error_m,stationary_hold,sensor_interruptions"
     }
 
     private val sessionId = System.currentTimeMillis()
@@ -75,6 +78,7 @@ class LiveNavigationRecorder(private val context: Context) {
     private var blackoutS = 0.0
     private var reacquiringS = 0.0
     private var calibratingS = 0.0
+    private var sensorGapS = 0.0
 
     val rawFile: File get() = raw.file
     val diagnosticsFile: File get() = diagnostics.file
@@ -110,7 +114,9 @@ class LiveNavigationRecorder(private val context: Context) {
         val dt = if (lastStateT.isFinite()) maxOf(state.t - lastStateT, 0.0) else 0.0
         val previousMode = lastMode
         if (previousMode != null && previousMode != state.mode) modeTransitions++
-        if (state.phase == Navigator.Phase.CALIBRATING) {
+        if (dt > 1.0) {
+            sensorGapS += dt
+        } else if (state.phase == Navigator.Phase.CALIBRATING) {
             calibratingS += dt
         } else when (previousMode ?: state.mode) {
             NavMode.AIDED -> aidedS += dt
@@ -150,6 +156,11 @@ class LiveNavigationRecorder(private val context: Context) {
             fmt(state.blackoutDistanceM),
             fmt(state.learnedSpeed),
             fmt(state.learnedSigma),
+            fmt(state.adaptedSpeed),
+            fmt(state.adaptedSpeedSigma),
+            fmt(state.speedModelBiasMs),
+            fmt(state.speedModelResidualSigmaMs),
+            state.speedModelCalibrationSamples.toString(),
             state.gnssFixesReceived.toString(),
             state.gnssUpdates.toString(),
             state.rejectedFixes.toString(),
@@ -167,6 +178,8 @@ class LiveNavigationRecorder(private val context: Context) {
             fmt(blackoutTest.referenceEastM),
             fmt(blackoutTest.referenceNorthM),
             fmt(blackoutTest.referenceErrorM),
+            state.stationaryHoldActive.toString(),
+            state.sensorInterruptions.toString(),
         ).joinToString(","))
 
         states++
@@ -218,6 +231,8 @@ class LiveNavigationRecorder(private val context: Context) {
         val calibration = end?.calibration
         val json = JSONObject().apply {
             put("session_id", sessionId)
+            put("app_version", org.neuronavx.logger.BuildConfig.VERSION_NAME)
+            put("app_version_code", org.neuronavx.logger.BuildConfig.VERSION_CODE)
             put("raw_file", summary.rawFile.name)
             put("diagnostics_file", summary.diagnosticsFile.name)
             put("duration_s", summary.durationS)
@@ -233,6 +248,9 @@ class LiveNavigationRecorder(private val context: Context) {
             put("mode_transitions", summary.modeTransitions)
             put("display_distance_m", summary.displayDistanceM)
             put("calibrating_s", calibratingS)
+            put("sensor_gap_s", sensorGapS)
+            put("sensor_interruptions", end?.sensorInterruptions ?: 0)
+            put("stationary_hold", end?.stationaryHoldActive ?: false)
             put("aided_s", aidedS)
             put("blackout_s", blackoutS)
             put("reacquiring_s", reacquiringS)
@@ -255,6 +273,18 @@ class LiveNavigationRecorder(private val context: Context) {
             put("heading_rate_source", end?.headingRateSource?.name ?: JSONObject.NULL)
             putFinite("final_ekf_gyro_bias_rad_s", end?.gyroBiasRadS ?: Double.NaN)
             putFinite("final_ekf_gyro_scale_error", end?.gyroScaleError ?: Double.NaN)
+            put("speed_model_adapter", JSONObject().apply {
+                put("ready", (end?.speedModelCalibrationSamples ?: 0) >= 3)
+                put("calibration_samples", end?.speedModelCalibrationSamples ?: 0)
+                putFinite("bias_ms", end?.speedModelBiasMs ?: Double.NaN)
+                putFinite(
+                    "residual_sigma_ms",
+                    end?.speedModelResidualSigmaMs ?: Double.NaN,
+                )
+                putFinite("last_raw_speed_ms", end?.learnedSpeed ?: Double.NaN)
+                putFinite("last_adapted_speed_ms", end?.adaptedSpeed ?: Double.NaN)
+                putFinite("last_adapted_sigma_ms", end?.adaptedSpeedSigma ?: Double.NaN)
+            })
             put("calibration", if (calibration == null) JSONObject.NULL else JSONObject().apply {
                 put("forward_angle_deg", Math.toDegrees(calibration.forwardAngleRad))
                 put("forward_accel_scale", calibration.forwardAccelScale)

@@ -45,8 +45,8 @@ import kotlin.math.sin
 class MapLibreOfflineRenderer(
     private val context: Context,
     private val archive: File,
-    private val topContentInsetPx: Int,
-    private val bottomContentInsetPx: Int,
+    private var topContentInsetPx: Int,
+    private var bottomContentInsetPx: Int,
     private val onBasemapReady: () -> Unit,
     private val onCoverageChanged: (covered: Boolean) -> Unit,
 ) {
@@ -62,6 +62,30 @@ class MapLibreOfflineRenderer(
     private var lastOutage = false
 
     private var rawSource: GeoJsonSource? = null
+    private var plannedSource: GeoJsonSource? = null
+    private var plannedRoute: List<RoutePoint> = emptyList()
+
+    fun setContentInsets(top: Int, bottom: Int) {
+        topContentInsetPx = top; bottomContentInsetPx = bottom
+        map?.setPadding(0, top, 0, bottom)
+        map?.uiSettings?.setCompassMargins(0, top, dp(18), 0)
+    }
+
+    fun setPlannedRoute(points: List<RoutePoint>) {
+        plannedRoute = points
+        val coordinates = JSONArray()
+        points.forEach { coordinates.put(JSONArray().put(it.lon).put(it.lat)) }
+        plannedSource?.setGeoJson(if (points.size < 2) EMPTY_FEATURE_COLLECTION else JSONObject()
+            .put("type", "Feature").put("properties", JSONObject())
+            .put("geometry", JSONObject().put("type", "LineString").put("coordinates", coordinates)).toString())
+        if (points.isNotEmpty() && pending == null) {
+            val bounds = org.maplibre.android.geometry.LatLngBounds.Builder()
+            points.forEach { bounds.include(LatLng(it.lat, it.lon)) }
+            view.post { if (view.width > 0 && view.height > 0 && pending == null)
+                runCatching { map?.moveCamera(CameraUpdateFactory.newLatLngBounds(bounds.build(),
+                    dp(28), topContentInsetPx + dp(28), dp(28), bottomContentInsetPx + dp(28))) } }
+        }
+    }
     private var aidedSource: GeoJsonSource? = null
     private var deniedSource: GeoJsonSource? = null
     private var uncertaintySource: GeoJsonSource? = null
@@ -126,6 +150,10 @@ class MapLibreOfflineRenderer(
     }
 
     private fun installEstimatorLayers(style: Style) {
+        plannedSource = GeoJsonSource("planned-road-route", EMPTY_FEATURE_COLLECTION).also(style::addSource)
+        style.addLayer(LineLayer("planned-road-route-line", "planned-road-route").withProperties(
+            lineColor("#57DCB5"), lineWidth(4f), lineCap(LINE_CAP_ROUND), lineJoin(LINE_JOIN_ROUND)))
+        setPlannedRoute(plannedRoute)
         rawSource = GeoJsonSource(RAW_SOURCE, EMPTY_FEATURE_COLLECTION).also(style::addSource)
         aidedSource = GeoJsonSource(AIDED_SOURCE, EMPTY_FEATURE_COLLECTION).also(style::addSource)
         deniedSource = GeoJsonSource(DENIED_SOURCE, EMPTY_FEATURE_COLLECTION).also(style::addSource)

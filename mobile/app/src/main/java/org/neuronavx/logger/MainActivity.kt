@@ -52,7 +52,7 @@ class MainActivity : ComponentActivity() {
 
         status = TextView(this).apply {
             textSize = 15f
-            text = "NeuroNav-X logger\n\nGrant location, mount the phone rigidly, then start."
+            text = "Waynova · Developer tools\n\nFor normal drives, use the home screen. These tools collect raw data and measure performance."
         }
         toggle = Button(this).apply {
             text = "Start logging"

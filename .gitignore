@@ -24,3 +24,8 @@ mobile/offline-maps/
 # Signing credentials must never be committed
 *.jks
 *.keystore
+
+# Local scratch from presentation/PDF generation, never part of the build
+.chart-data-*/
+tmp/
+:memory:.ses

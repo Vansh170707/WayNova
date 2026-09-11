@@ -15,6 +15,11 @@ class HeadingRateAccumulator(
     private var integratedRad = 0.0
     private var latestRate = Double.NaN
 
+    fun reset() {
+        previousT = Double.NaN; previousRate = Double.NaN
+        integratedRad = 0.0; latestRate = Double.NaN
+    }
+
     fun add(t: Double, gyro: DoubleArray, gravity: DoubleArray) {
         val rate = Signals.gravityProjectedHeadingRate(gyro, gravity)
         if (!t.isFinite() || !rate.isFinite()) return

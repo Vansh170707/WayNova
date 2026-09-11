@@ -9,5 +9,6 @@
         <item name="android:windowActionModeOverlay">true</item>
         <item name="android:colorAccent">#4C9BFF</item>
         <item name="android:windowNoTitle">true</item>
+        <item name="android:alertDialogTheme">@style/Theme.Waynova.Dialog</item>
     </style>
 </resources>

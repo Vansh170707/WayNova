@@ -3,7 +3,7 @@ package org.neuronavx.logger.nav
 import kotlin.math.hypot
 
 /** Lifecycle of one controlled field outage. Only one test is allowed per live session. */
-enum class FieldBlackoutPhase { OFF, ARMED, WITHHOLDING, RECOVERING, COMPLETE }
+enum class FieldBlackoutPhase { OFF, ARMED, WITHHOLDING, RECOVERING, COMPLETE, INTERRUPTED }
 
 /** Immutable test evidence shown by the UI and written beside every estimator state. */
 data class FieldBlackoutSnapshot(
@@ -42,6 +42,7 @@ class FieldBlackoutTest {
     private var startT = Double.NaN
     private var endT = Double.NaN
     private var lastT = 0.0
+    private var lastSampleT = Double.NaN
     private var withheldFixes = 0
     private var referenceSamples = 0
     private var referenceEastM = Double.NaN
@@ -64,6 +65,15 @@ class FieldBlackoutTest {
     }
 
     @Synchronized
+    fun interrupt() {
+        if (phase in setOf(FieldBlackoutPhase.ARMED, FieldBlackoutPhase.WITHHOLDING,
+                FieldBlackoutPhase.RECOVERING)) {
+            if (startT.isFinite() && !endT.isFinite()) endT = lastSampleT
+            phase = FieldBlackoutPhase.INTERRUPTED
+        }
+    }
+
+    @Synchronized
     fun cancel(): Boolean {
         if (phase != FieldBlackoutPhase.ARMED) return false
         phase = FieldBlackoutPhase.OFF
@@ -75,11 +85,19 @@ class FieldBlackoutTest {
 
     /** Called immediately before each IMU sample reaches the estimator. */
     @Synchronized
-    fun beforeSample(t: Double, navigationPhase: Navigator.Phase?) {
+    fun beforeSample(t: Double, navigationPhase: Navigator.Phase?, mode: NavMode = NavMode.AIDED) {
+        if (!t.isFinite() || (lastSampleT.isFinite() && t <= lastSampleT)) return
+        if (lastSampleT.isFinite() && t - lastSampleT > 1.0 &&
+            phase in setOf(FieldBlackoutPhase.ARMED, FieldBlackoutPhase.WITHHOLDING,
+                FieldBlackoutPhase.RECOVERING)) {
+            if (startT.isFinite() && !endT.isFinite()) endT = lastSampleT
+            phase = FieldBlackoutPhase.INTERRUPTED
+        }
+        lastSampleT = t
         lastT = t
         when (phase) {
             FieldBlackoutPhase.ARMED -> {
-                if (navigationPhase != Navigator.Phase.NAVIGATING) {
+                if (navigationPhase != Navigator.Phase.NAVIGATING || mode != NavMode.AIDED) {
                     navigatingSinceT = Double.NaN
                     return
                 }

@@ -49,7 +49,7 @@ data class GnssFix(
  */
 class Navigator(
     private val runtime: RuntimeConfig,
-    private val model: SpeedModel?,
+    private val model: SpeedPredictionModel?,
     ekfConfig: EsEkf.Config = EsEkf.Config(),
     private val blackoutConfig: BlackoutConfig = BlackoutConfig(),
     private val inputRateHz: Double = runtime.rateHz,
@@ -68,6 +68,10 @@ class Navigator(
         val blackoutS: Double,
         val blackoutDistanceM: Double,
         val learnedSpeed: Double, val learnedSigma: Double,
+        val adaptedSpeed: Double, val adaptedSpeedSigma: Double,
+        val speedModelBiasMs: Double,
+        val speedModelResidualSigmaMs: Double,
+        val speedModelCalibrationSamples: Int,
         val calibration: Alignment?,
         val calibrationProgress: Double,
         val gnssUpdates: Int, val rejectedFixes: Int,
@@ -76,6 +80,8 @@ class Navigator(
         val gyroBiasRadS: Double,
         val gyroScaleError: Double,
         val headingRateSource: HeadingRateSource,
+        val stationaryHoldActive: Boolean = false,
+        val sensorInterruptions: Int = 0,
     )
 
     private val nativeHeadingContract = inputRateHz > runtime.rateHz * 1.5
@@ -90,14 +96,19 @@ class Navigator(
         courseMinSpeed = maxOf(ekfConfig.courseMinSpeed, LIVE_COURSE_MIN_SPEED_MS),
     ) else ekfConfig
     private val ekf = EsEkf(effectiveEkfConfig)
-    private val calibration = OnlineCalibration(
+    private fun newCalibration() = OnlineCalibration(
         minSpeedForYaw = if (nativeHeadingContract) 2.0 else 8.0,
         useGravityProjectedYaw = nativeHeadingContract,
     )
+    private var calibration = newCalibration()
     private val blackout = BlackoutManager(blackoutConfig)
     private val smoother = TrackSmoother(blackoutConfig)
     private val window = FeatureWindow(runtime.windowSamples)
     private val nativeHeadingRate = HeadingRateAccumulator()
+    private val liveSpeedAdapter = LiveSpeedAdapter(maxGnssAccuracyM = blackoutConfig.maxAccuracyM)
+    private val stationaryHold = StationaryHold()
+    private var lastInputT = Double.NaN
+    private var sensorInterruptions = 0
 
     /**
      * Integer-factor decimation to the rate the model was trained at.
@@ -137,6 +148,7 @@ class Navigator(
     private var lastLearnedT = Double.NEGATIVE_INFINITY
     private var justInitialized = false
     private var learned = SpeedEstimate(Double.NaN, Double.NaN)
+    private var adaptedLearned = AdaptedSpeedEstimate(Double.NaN, Double.NaN)
 
     /** ENU origin, taken from the first usable fix. */
     var originLat = Double.NaN; private set
@@ -178,6 +190,28 @@ class Navigator(
      */
     fun addSample(t: Double, accel: DoubleArray, gravity: DoubleArray, gyro: DoubleArray,
                   fix: GnssFix?): State? {
+        if (!t.isFinite() || (lastInputT.isFinite() && t <= lastInputT)) return null
+        if (nativeHeadingContract && lastInputT.isFinite() && t - lastInputT > 1.0) {
+            sensorInterruptions++
+            // No motion was observed through this interval. Do not integrate one stale
+            // acceleration for minutes, or reuse alignment if the phone was moved.
+            calibration = newCalibration()
+            calibration.setRate(inputRateHz)
+            align = null; phase = Phase.CALIBRATING; state = null
+            pendingNavigationFix = null
+            lastEmitT = Double.NaN; lastLearnedT = Double.NEGATIVE_INFINITY
+            lastGnssFixT = Double.NEGATIVE_INFINITY
+            heldSpeed = 0.0; heldBearing = Double.NaN
+            sampleIndex = -1; justInitialized = false
+            learned = SpeedEstimate(Double.NaN, Double.NaN)
+            adaptedLearned = AdaptedSpeedEstimate(Double.NaN, Double.NaN)
+            nativeHeadingRate.reset(); window.reset(); liveSpeedAdapter.reset()
+            stationaryHold.reset(); smoother.reset(); blackout.reset(t)
+            trackEast.clear(); trackNorth.clear(); trackDark.clear()
+            displayEastTrack.clear(); displayNorthTrack.clear()
+        }
+        lastInputT = t
+        if (nativeHeadingContract) stationaryHold.add(t, accel, gravity, gyro)
         if (fix != null && fix.lat.isFinite() && originLat.isNaN()) {
             setOrigin(fix.lat, fix.lon, if (fix.alt.isFinite()) fix.alt else 0.0)
         }
@@ -237,9 +271,18 @@ class Navigator(
         )
 
         val inOutage = blackout.mode != NavMode.AIDED
+        if (nativeHeadingContract && !inOutage && navigationFix != null) {
+            liveSpeedAdapter.observeTrustedSpeed(
+                t,
+                navigationFix.speed,
+                navigationFix.accuracyM,
+            )
+            stationaryHold.observeFix(t, navigationFix.speed, navigationFix.accuracyM)
+        }
         // While dark, speed is carried by the learned estimate rather than by integrating
         // an accelerometer the field audit showed to be unreliable.
-        val forwardAccel = if (inOutage) 0.0 else forwardAcceleration(accel, gravity, a)
+        val holdStopped = nativeHeadingContract && stationaryHold.active
+        val forwardAccel = if (inOutage || holdStopped) 0.0 else forwardAcceleration(accel, gravity, a)
         // The sample that initialised the state has already been consumed by doing so;
         // propagating it again would advance the filter by one step the desktop does not
         // take, and every later comparison would carry that offset.
@@ -254,11 +297,36 @@ class Navigator(
         }
         justInitialized = false
 
-        if (inOutage && model != null && window.isFull &&
+        val aidedCalibrationFix = nativeHeadingContract && !inOutage &&
+            navigationFix != null && navigationFix.speed.isFinite()
+        if (model != null && window.isFull &&
+            (inOutage || aidedCalibrationFix) &&
             t - lastLearnedT >= 1.0 / ekf.config.learnedSpeedUpdateHz) {
             learned = model.predict(window)
-            if (ekf.updateLearnedSpeed(learned.speed, learned.sigma)) lastLearnedT = t
+            if (nativeHeadingContract) {
+                // Do not hammer ORT at 10 Hz if a guarded pseudo-measurement is rejected.
+                // Live policy itself owns the one-hertz cadence.
+                lastLearnedT = t
+                if (inOutage) {
+                    adaptedLearned = liveSpeedAdapter.adapt(t, learned)
+                    if (!holdStopped) ekf.updateLearnedSpeed(adaptedLearned.speed, adaptedLearned.sigma)
+                } else {
+                    liveSpeedAdapter.observeAidedPrediction(
+                        learned,
+                        navigationFix!!.speed,
+                        navigationFix.accuracyM,
+                    )
+                    adaptedLearned = liveSpeedAdapter.preview(learned)
+                }
+            } else if (inOutage) {
+                // Replay preserves the trained desktop contract exactly. Only live Android
+                // earns a device/drive correction from its own aided model/GNSS pairs.
+                adaptedLearned = AdaptedSpeedEstimate(learned.speed, learned.sigma)
+                if (ekf.updateLearnedSpeed(learned.speed, learned.sigma)) lastLearnedT = t
+            }
         }
+
+        if (holdStopped) ekf.updateZeroVelocity()
 
         var east = Double.NaN; var north = Double.NaN
         var accuracy = Double.NaN
@@ -297,6 +365,11 @@ class Navigator(
             blackoutS = blackout.blackoutDuration(t),
             blackoutDistanceM = blackout.blackoutDistanceM,
             learnedSpeed = learned.speed, learnedSigma = learned.sigma,
+            adaptedSpeed = adaptedLearned.speed,
+            adaptedSpeedSigma = adaptedLearned.sigma,
+            speedModelBiasMs = liveSpeedAdapter.biasMs,
+            speedModelResidualSigmaMs = liveSpeedAdapter.residualSigmaMs,
+            speedModelCalibrationSamples = liveSpeedAdapter.calibrationSamples,
             calibration = a, calibrationProgress = 1.0,
             gnssUpdates = fusedGnssFixes, rejectedFixes = ekf.rejected,
             gnssFixesReceived = gnssFixesReceived,
@@ -304,6 +377,8 @@ class Navigator(
             gyroBiasRadS = ekf.gyroBias,
             gyroScaleError = ekf.gyroScaleError,
             headingRateSource = headingRateSource,
+            stationaryHoldActive = holdStopped,
+            sensorInterruptions = sensorInterruptions,
         )
         state = s
         lastT = t
@@ -322,6 +397,10 @@ class Navigator(
             heading = Double.NaN, speed = heldSpeed, sigmaM = Double.NaN,
             blackoutS = 0.0, blackoutDistanceM = 0.0,
             learnedSpeed = Double.NaN, learnedSigma = Double.NaN,
+            adaptedSpeed = Double.NaN, adaptedSpeedSigma = Double.NaN,
+            speedModelBiasMs = Double.NaN,
+            speedModelResidualSigmaMs = Double.NaN,
+            speedModelCalibrationSamples = 0,
             calibration = null, calibrationProgress = progress,
             gnssUpdates = 0, rejectedFixes = 0,
             gnssFixesReceived = gnssFixesReceived,
@@ -330,6 +409,7 @@ class Navigator(
             gyroBiasRadS = Double.NaN,
             gyroScaleError = Double.NaN,
             headingRateSource = headingRateSource,
+            sensorInterruptions = sensorInterruptions,
         )
         state = s
         return s

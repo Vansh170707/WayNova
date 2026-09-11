@@ -1,6 +1,11 @@
 package org.neuronavx.logger
 
 import android.content.res.ColorStateList
+import android.Manifest
+import android.app.AlertDialog
+import android.location.LocationManager
+import android.content.Context
+import android.view.WindowManager
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.Typeface
@@ -39,6 +44,11 @@ import org.neuronavx.logger.nav.ReplaySource
 import org.neuronavx.logger.nav.RuntimeConfig
 import org.neuronavx.logger.nav.SensorLoggerRate
 import org.neuronavx.logger.nav.SpeedModel
+import org.neuronavx.logger.nav.RoutePlan
+import org.neuronavx.logger.nav.RoutePoint
+import org.neuronavx.logger.nav.EnuMapProjection
+import org.json.JSONObject
+import java.io.File
 import kotlin.concurrent.thread
 import kotlin.math.hypot
 import kotlin.math.roundToInt
@@ -69,6 +79,9 @@ class NavigationActivity : ComponentActivity() {
     private lateinit var speedMetric: MetricViews
     private lateinit var headingMetric: MetricViews
     private lateinit var uncertaintyMetric: MetricViews
+    private lateinit var routeButton: TextView
+    private var plannedRoute: RoutePlan? = null
+    private var mapBottomInsetPx = 0
 
     private var navigator: Navigator? = null
     private var googleMapRenderer: GoogleMapRenderer? = null
@@ -89,6 +102,12 @@ class NavigationActivity : ComponentActivity() {
 
     private val ui = Handler(Looper.getMainLooper())
     private var lastRendered = 0L
+    private val locationPermission = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        if (permissions[Manifest.permission.ACCESS_FINE_LOCATION] == true) onLive()
+        else showFailure("Precise location is required. Enable it in Android app permissions and try again.")
+    }
     private val offlineMapPicker = registerForActivityResult(
         ActivityResultContracts.OpenDocument()
     ) { uri -> uri?.let(::importOfflineMap) }
@@ -100,6 +119,13 @@ class NavigationActivity : ComponentActivity() {
         googleMapRenderer?.onCreate(savedInstanceState)
         showIdleState()
         prepareBundledOfflineMap()
+        runCatching {
+            val cache = File(filesDir, "planned_route.json")
+            if (cache.exists() && cache.length() <= 2_000_000)
+                RoutePlan.fromCache(JSONObject(cache.readText())) else null
+        }.getOrNull()?.let { applyRoute(it, save = false) }
+        if (savedInstanceState == null && intent.getBooleanExtra("start_demo", false)) onReplay()
+        else if (savedInstanceState == null && intent.getBooleanExtra("plan_route", false)) openRouteSearch()
     }
 
     private fun configureWindow() {
@@ -142,7 +168,7 @@ class NavigationActivity : ComponentActivity() {
             // The canvas remains visible behind the overlays but keeps important content
             // out from under the header and the telemetry panel.
             setPadding(dp(18), dp(126), dp(18), dp(328))
-            contentDescription = "NeuroNav trajectory and uncertainty map"
+            contentDescription = "Waynova estimated track and uncertainty map"
         }
         root.addView(map, FrameLayout.LayoutParams(MATCH, MATCH))
 
@@ -186,7 +212,7 @@ class NavigationActivity : ComponentActivity() {
 
         recenterButton = actionText("⌖", 25f, dp(48)).apply {
             visibility = View.GONE
-            contentDescription = "Recenter map on NeuroNav position"
+            contentDescription = "Recenter map on Waynova position"
             setOnClickListener {
                 performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
                 if (googleMapActive) googleMapRenderer?.recenter()
@@ -214,11 +240,118 @@ class NavigationActivity : ComponentActivity() {
             setMargins(dp(18), 0, 0, dp(344))
         })
 
-        root.addView(buildBottomPanel(), FrameLayout.LayoutParams(MATCH, WRAP).apply {
+        routeButton = actionButton("⌕  Find destination / directions", primary = false).apply {
+            contentDescription = "Find destination or view saved driving directions"
+            setOnClickListener { onRouteAction() }
+        }
+        root.addView(routeButton, FrameLayout.LayoutParams(MATCH, dp(48)).apply {
+            gravity = Gravity.TOP
+            setMargins(dp(18), dp(140), dp(18), 0)
+        })
+        val bottomPanel = buildBottomPanel()
+        root.addView(bottomPanel, FrameLayout.LayoutParams(MATCH, WRAP).apply {
             gravity = Gravity.BOTTOM
             setMargins(dp(12), 0, dp(12), dp(12))
         })
+        bottomPanel.addOnLayoutChangeListener { _, _, top, _, _, _, _, _, _ ->
+            val bottomInset = root.height - root.paddingBottom - top + dp(12)
+            mapBottomInsetPx = bottomInset
+            map.setPadding(dp(18), dp(198), dp(18), bottomInset)
+            googleMapRenderer?.setContentInsets(dp(198), bottomInset)
+            mapLibreRenderer?.setContentInsets(dp(198), bottomInset)
+            (recenterButton.layoutParams as FrameLayout.LayoutParams).also {
+                it.bottomMargin = bottomInset + dp(12); recenterButton.layoutParams = it
+            }
+            (mapAttribution.layoutParams as FrameLayout.LayoutParams).also {
+                it.bottomMargin = bottomInset + dp(18); mapAttribution.layoutParams = it
+            }
+        }
         return root
+    }
+
+    private fun onRouteAction() {
+        if (replayThread != null) {
+            Toast.makeText(this, "Stop the demo before planning your own route.", Toast.LENGTH_LONG).show()
+            return
+        }
+        if (live != null && (navigator?.state?.speed ?: 0.0) > 0.5) {
+            Toast.makeText(this, "Park before searching or reading directions.", Toast.LENGTH_LONG).show()
+            return
+        }
+        val route = plannedRoute
+        if (route == null) { openRouteSearch(); return }
+        val directions = android.widget.ListView(this).apply {
+            divider = null
+            setPadding(dp(16), 0, dp(16), 0)
+            addHeaderView(label("%.1f km · about %.0f min\nSaved plan · no live turn alerts or traffic".format(
+                route.distanceM / 1000, route.durationS / 60), 14f, ACCENT_GREEN, Typeface.BOLD).apply {
+                setPadding(dp(8), dp(10), dp(8), dp(16))
+            }, null, false)
+            addFooterView(label("Mint = planned route · blue/orange = estimated track\nRoutes: OSRM · © OpenStreetMap (ODbL)\nFollow road signs. Set up only while parked.",
+                11f, TEXT_MUTED, Typeface.NORMAL).apply {
+                setPadding(dp(8), dp(14), dp(8), dp(10))
+            }, null, false)
+            adapter = object : android.widget.BaseAdapter() {
+                override fun getCount() = route.steps.size
+                override fun getItem(position: Int) = route.steps[position]
+                override fun getItemId(position: Int) = position.toLong()
+                override fun isEnabled(position: Int) = false
+                override fun getView(position: Int, convertView: View?, parent: ViewGroup?): View {
+                    val row = (convertView as? LinearLayout) ?: LinearLayout(this@NavigationActivity).apply {
+                        orientation = LinearLayout.VERTICAL
+                        setPadding(dp(12), dp(14), dp(12), dp(14))
+                        addView(label("", 14f, TEXT_PRIMARY, Typeface.BOLD))
+                        addView(label("", 12f, TEXT_SECONDARY, Typeface.NORMAL).apply { setPadding(0, dp(5), 0, 0) })
+                    }
+                    val step = route.steps[position]
+                    (row.getChildAt(0) as TextView).text = "${position + 1}. ${step.instruction}"
+                    (row.getChildAt(1) as TextView).text = if (step.distanceM > 0)
+                        "Continue for %.0f m".format(step.distanceM) else "Destination"
+                    row.background = pill(if (position % 2 == 0) SURFACE_SOFT else NAV_BACKGROUND, dp(12))
+                    return row
+                }
+            }
+        }
+        AlertDialog.Builder(this).setTitle(route.destination)
+            .setView(directions)
+            .setPositiveButton("Done", null)
+            .setNeutralButton("New route") { _, _ -> openRouteSearch() }
+            .setNegativeButton("Clear") { _, _ ->
+                plannedRoute = null
+                File(filesDir, "planned_route.json").delete()
+                googleMapRenderer?.setPlannedRoute(emptyList())
+                mapLibreRenderer?.setPlannedRoute(emptyList())
+                map.setPlannedRoute(emptyList(), Double.NaN, Double.NaN)
+                routeButton.text = "⌕  Find destination / directions"
+                refreshMapAttribution()
+            }.show()
+    }
+
+    private fun openRouteSearch() {
+        val nav = navigator
+        val state = nav?.state
+        val point = if (state != null && state.phase == Navigator.Phase.NAVIGATING &&
+            state.mode == NavMode.AIDED && state.gnssFixAgeS < 3 && state.sigmaM < 30) {
+            EnuMapProjection.toLatLng(nav.originLat, nav.originLon, state.east, state.north)
+                .let { RoutePoint(it.latitude, it.longitude) }
+        } else null
+        RoutePlannerDialog.show(this, point) { applyRoute(it) }
+    }
+
+    private fun applyRoute(route: RoutePlan, save: Boolean = true) {
+        plannedRoute = route
+        if (live == null && replayThread == null) {
+            latestMapSnapshot = null
+            googleMapRenderer?.clear(); mapLibreRenderer?.clear(); map.clear()
+            if (mapLibreReady) showMapLibreBasemap()
+        }
+        googleMapRenderer?.setPlannedRoute(route.points)
+        mapLibreRenderer?.setPlannedRoute(route.points)
+        map.setPlannedRoute(route.points, route.points.first().lat, route.points.first().lon)
+        routeButton.text = "↗  OSRM plan · %.1f km · Directions".format(route.distanceM / 1000)
+        refreshMapAttribution()
+        if (save) runCatching { File(filesDir, "planned_route.json").writeText(route.toJson().toString()) }
+            .onFailure { Toast.makeText(this, "Route loaded but could not be saved for later.", Toast.LENGTH_LONG).show() }
     }
 
     private fun buildHeader(): View {
@@ -238,7 +371,7 @@ class NavigationActivity : ComponentActivity() {
                 orientation = LinearLayout.VERTICAL
                 gravity = Gravity.CENTER_VERTICAL
                 setPadding(dp(10), 0, 0, 0)
-                addView(label("NEURONAV / X", 15f, TEXT_PRIMARY, Typeface.BOLD).apply {
+                addView(label("WAYNOVA", 17f, TEXT_PRIMARY, Typeface.BOLD).apply {
                     letterSpacing = 0.11f
                 })
                 addView(label("RESILIENT POSITIONING", 9f, TEXT_MUTED, Typeface.BOLD).apply {
@@ -246,7 +379,7 @@ class NavigationActivity : ComponentActivity() {
                 })
             }, LinearLayout.LayoutParams(0, MATCH, 1f))
 
-            addView(label("NX", 12f, ACCENT_BLUE, Typeface.BOLD).apply {
+            addView(label("W", 18f, ACCENT_BLUE, Typeface.BOLD).apply {
                 gravity = Gravity.CENTER
                 letterSpacing = 0.08f
                 background = pill(Color.parseColor("#162A45"), dp(14), Color.parseColor("#31547C"))
@@ -310,9 +443,11 @@ class NavigationActivity : ComponentActivity() {
             contextLine = label("ESTIMATOR READY  •  TRACK 0 PTS", 10f, TEXT_MUTED, Typeface.BOLD).apply {
                 letterSpacing = 0.08f
                 gravity = Gravity.CENTER_VERTICAL
-                maxLines = 1
+                maxLines = 3
             }
-            addView(contextLine, LinearLayout.LayoutParams(MATCH, dp(30)).apply { topMargin = dp(4) })
+            addView(contextLine, LinearLayout.LayoutParams(MATCH, WRAP).apply {
+                topMargin = dp(8); bottomMargin = dp(8)
+            })
 
             val actions = LinearLayout(this@NavigationActivity).apply {
                 orientation = LinearLayout.HORIZONTAL
@@ -435,7 +570,7 @@ class NavigationActivity : ComponentActivity() {
         googleMapRenderer?.view?.visibility = View.VISIBLE
         mapLibreRenderer?.view?.visibility = View.INVISIBLE
         map.visibility = View.INVISIBLE
-        mapAttribution.visibility = View.GONE
+        refreshMapAttribution()
         mapSourceBadge.text = "GOOGLE MAP  ◆"
         mapSourceBadge.setTextColor(ACCENT_GREEN)
         mapSourceBadge.background = pill(
@@ -450,7 +585,7 @@ class NavigationActivity : ComponentActivity() {
         googleMapRenderer?.view?.visibility = View.INVISIBLE
         mapLibreRenderer?.view?.visibility = View.INVISIBLE
         map.visibility = View.VISIBLE
-        mapAttribution.visibility = View.GONE
+        refreshMapAttribution()
         mapSourceBadge.text = "LOCAL FALLBACK"
         mapSourceBadge.setTextColor(TEXT_MUTED)
         mapSourceBadge.background = pill(Color.argb(225, 13, 21, 33), dp(18), BORDER_SUBTLE)
@@ -470,7 +605,7 @@ class NavigationActivity : ComponentActivity() {
         googleMapRenderer?.view?.visibility = View.INVISIBLE
         mapLibreRenderer?.view?.visibility = View.VISIBLE
         map.visibility = View.INVISIBLE
-        mapAttribution.visibility = View.VISIBLE
+        refreshMapAttribution()
         val size = OfflineMapStore.installed(this)?.bytes ?: 0L
         mapSourceBadge.text = "OFFLINE GN  ·  ${OfflineMapStore.formatBytes(size)}"
         mapSourceBadge.setTextColor(ACCENT_GREEN)
@@ -478,6 +613,13 @@ class NavigationActivity : ComponentActivity() {
             Color.argb(225, 13, 21, 33), dp(18), withAlpha(ACCENT_GREEN, 125)
         )
         recenterButton.visibility = View.VISIBLE
+    }
+
+    private fun refreshMapAttribution() {
+        val hasRoute = plannedRoute != null && replayThread == null
+        mapAttribution.text = if (mapLibreActive) "MapLibre · © OpenStreetMap · Protomaps"
+            else "Routes: OSRM · © OpenStreetMap"
+        mapAttribution.visibility = if (mapLibreActive || hasRoute) View.VISIBLE else View.GONE
     }
 
     private fun cycleMapRenderer() {
@@ -512,6 +654,7 @@ class NavigationActivity : ComponentActivity() {
                 }
             }.onSuccess { installed ->
                 ui.post {
+                    if (isDestroyed) return@post
                     preparingOfflineMap = false
                     installMapLibreRenderer(installed)
                 }
@@ -574,8 +717,8 @@ class NavigationActivity : ComponentActivity() {
         val renderer = MapLibreOfflineRenderer(
             context = this,
             archive = installed.file,
-            topContentInsetPx = dp(126),
-            bottomContentInsetPx = dp(328),
+            topContentInsetPx = dp(198),
+            bottomContentInsetPx = mapBottomInsetPx.takeIf { it > 0 } ?: dp(328),
             onBasemapReady = {
                 ui.post {
                     mapLibreReady = true
@@ -592,6 +735,7 @@ class NavigationActivity : ComponentActivity() {
             },
         )
         mapLibreRenderer = renderer
+        if (replayThread == null) plannedRoute?.let { renderer.setPlannedRoute(it.points) }
         renderer.view.visibility = View.INVISIBLE
         root.addView(renderer.view, 0, FrameLayout.LayoutParams(MATCH, MATCH))
         renderer.onCreate(null)
@@ -642,6 +786,10 @@ class NavigationActivity : ComponentActivity() {
         map.clear()
         googleMapRenderer?.clear()
         mapLibreRenderer?.clear()
+        googleMapRenderer?.setPlannedRoute(emptyList())
+        mapLibreRenderer?.setPlannedRoute(emptyList())
+        map.setPlannedRoute(emptyList(), Double.NaN, Double.NaN)
+        routeButton.text = "RECORDED DEMO · NOT A LIVE DRIVE"
         showStartingState("DEMO STARTING", "Loading the recorded GNSS-loss route…")
 
         replayThread = thread(name = "neuronavx-replay") {
@@ -706,7 +854,18 @@ class NavigationActivity : ComponentActivity() {
             )
             return
         }
+        if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+            locationPermission.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION,
+                Manifest.permission.ACCESS_COARSE_LOCATION))
+            return
+        }
+        if (!(getSystemService(Context.LOCATION_SERVICE) as LocationManager)
+                .isProviderEnabled(LocationManager.GPS_PROVIDER)) {
+            showFailure("Android Location is off. Turn it on before starting; the controlled test hides GPS inside Waynova.")
+            return
+        }
         stopReplay()
+        plannedRoute?.let { applyRoute(it, save = false) }
         try {
             val runtime = RuntimeConfig.fromAsset(this)
             val speed = SpeedModel(this, runtime).also { model = it }
@@ -777,6 +936,8 @@ class NavigationActivity : ComponentActivity() {
         val dn = nav.displayNorthTrack.toDoubleArray()
         val dark = nav.trackDark.toBooleanArray()
         ui.post {
+            if (isDestroyed) return@post
+            if (live != null) plannedRoute?.let { map.setPlannedRoute(it.points, nav.originLat, nav.originLon) }
             map.submit(
                 e, n, de, dn, dark, state.displayEast, state.displayNorth,
                 state.heading, state.sigmaM, state.mode != NavMode.AIDED,
@@ -818,7 +979,7 @@ class NavigationActivity : ComponentActivity() {
                 guidance.text = "Keep the mount fixed and include normal left and right turns; weak axis fits are no longer accepted."
             } else {
                 headline.text = "Preparing resilient navigation"
-                guidance.text = "Keep GNSS available and drive normally while NeuroNav learns the phone mount."
+                guidance.text = "Keep GPS available and drive normally while Waynova learns the phone mount."
             }
             setMetric(headingMetric, "—", "DEG")
             setMetric(uncertaintyMetric, progress.toString(), "% READY")
@@ -827,6 +988,11 @@ class NavigationActivity : ComponentActivity() {
             contextLine.text = if (progress >= 99)
                 "EVIDENCE COLLECTED  •  WAITING FOR A STRONG YAW AXIS"
             else "CALIBRATION IN PROGRESS  •  ESTIMATOR ON DEVICE"
+            if (s.sensorInterruptions > 0) {
+                headline.text = "Sensor updates interrupted"
+                guidance.text = "Keep the app open with GPS available to recalibrate. Start a new session for another test."
+                contextLine.text = "PREVIOUS TEST INCOMPLETE"
+            }
             return
         }
 
@@ -887,8 +1053,8 @@ class NavigationActivity : ComponentActivity() {
                 setMode("GNSS DENIED", ACCENT_AMBER)
                 eyebrow.text = "RESILIENT MODE"
                 eyebrow.setTextColor(ACCENT_AMBER)
-                headline.text = "Navigating through signal loss"
-                guidance.text = "Inertial sensing and learned speed are carrying your position."
+                headline.text = "Estimating through signal loss"
+                guidance.text = "Position is estimated, not GPS-confirmed. Drift grows during the outage."
                 contextLine.text = if (fieldTest?.phase == FieldBlackoutPhase.WITHHOLDING)
                     "%.0f S LEFT  •  %.1f M REF ERROR  •  %.0f M TRAVELLED".format(
                         fieldTest.remainingS, fieldTest.referenceErrorM, s.blackoutDistanceM
@@ -937,7 +1103,7 @@ class NavigationActivity : ComponentActivity() {
         setMode(mode, ACCENT_BLUE)
         eyebrow.text = "INITIALIZING"
         eyebrow.setTextColor(ACCENT_BLUE)
-        headline.text = "Starting NeuroNav-X"
+        headline.text = "Starting Waynova"
         guidance.text = message
         contextLine.text = "LOADING MODEL  •  CHECKING SENSOR STREAM"
         calibrationProgress.visibility = View.GONE
@@ -949,6 +1115,9 @@ class NavigationActivity : ComponentActivity() {
         detail: String = "ESTIMATOR STOPPED  •  TRACK RETAINED",
     ) {
         setMode("PAUSED", TEXT_SECONDARY)
+        setMetric(speedMetric, "—", "KM/H")
+        setMetric(headingMetric, "—", "DEG")
+        setMetric(uncertaintyMetric, "—", "M 1σ")
         eyebrow.text = "SESSION PAUSED"
         eyebrow.setTextColor(TEXT_SECONDARY)
         headline.text = title
@@ -968,6 +1137,8 @@ class NavigationActivity : ComponentActivity() {
     }
 
     private fun setActions(replayRunning: Boolean, liveRunning: Boolean) {
+        if (replayRunning || liveRunning) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         liveButton.text = if (liveRunning) "Stop navigation" else "Start live navigation"
         liveButton.isEnabled = !replayRunning
         liveButton.alpha = if (liveButton.isEnabled) 1f else 0.42f
@@ -1002,6 +1173,10 @@ class NavigationActivity : ComponentActivity() {
                 replayButton.text = "Test complete"
                 replayButton.isEnabled = false
             }
+            FieldBlackoutPhase.INTERRUPTED -> {
+                replayButton.text = "Test interrupted"
+                replayButton.isEnabled = false
+            }
         }
         replayButton.alpha = if (replayButton.isEnabled) 1f else 0.56f
     }
@@ -1031,6 +1206,18 @@ class NavigationActivity : ComponentActivity() {
     }
 
     override fun onStop() {
+        // This prototype does not run a background navigation service. Close and save
+        // explicitly instead of silently carrying stale IMU state while Android suspends it.
+        if (live != null) {
+            live?.interruptTest()
+            stopLive()?.let(::showSavedSession)
+            setActions(replayRunning = false, liveRunning = false)
+            guidance.text = "Session saved because the app left the foreground. Start a new session when ready."
+        }
+        if (replayThread != null) {
+            stopReplay()
+            showPausedState("Demo paused", "Return to Replay demo to restart the recorded demonstration.")
+        }
         activityStarted = false
         mapLibreRenderer?.onStop()
         googleMapRenderer?.onStop()

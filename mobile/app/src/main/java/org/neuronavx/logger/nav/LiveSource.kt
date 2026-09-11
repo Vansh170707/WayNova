@@ -60,12 +60,18 @@ class LiveSource(
         fieldBlackoutTest.arm(durationS, aidedLeadInS)
 
     fun cancelBlackoutTest(): Boolean = fieldBlackoutTest.cancel()
+    fun interruptTest() = fieldBlackoutTest.interrupt()
 
     fun blackoutTestSnapshot(): FieldBlackoutSnapshot = fieldBlackoutTest.snapshot()
 
     @SuppressLint("MissingPermission")
     fun start() {
         if (running) return
+        listOf(Sensor.TYPE_ACCELEROMETER, Sensor.TYPE_GYROSCOPE, Sensor.TYPE_GRAVITY).forEach {
+            check(sensorManager.getDefaultSensor(it) != null) {
+                "A required motion sensor is unavailable (type $it). This device cannot run the live estimator."
+            }
+        }
         startNanos = SystemClock.elapsedRealtimeNanos()
         recorder = LiveNavigationRecorder(context).also { it.start(startNanos) }
         lastSummary = null
@@ -114,7 +120,7 @@ class LiveSource(
             Sensor.TYPE_ACCELEROMETER -> {
                 copy(event, accel)
                 val t = (event.timestamp - startNanos) / 1e9
-                fieldBlackoutTest.beforeSample(t, navigator.state?.phase)
+                fieldBlackoutTest.beforeSample(t, navigator.state?.phase, navigator.state?.mode ?: NavMode.BLACKOUT)
                 recorder?.recordImu(event.timestamp, accel, gyro, magnetic, gravity)
                 // hand the fix over exactly once, on the next IMU row, so a held value is
                 // never fused twice

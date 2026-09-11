@@ -37,8 +37,8 @@ import kotlin.math.max
  */
 class GoogleMapRenderer(
     private val context: Context,
-    private val topContentInsetPx: Int,
-    private val bottomContentInsetPx: Int,
+    private var topContentInsetPx: Int,
+    private var bottomContentInsetPx: Int,
     private val onBasemapReady: () -> Unit,
 ) {
     val view = MapView(context)
@@ -53,6 +53,27 @@ class GoogleMapRenderer(
     private var lastCameraUpdateMs = 0L
 
     private var rawEstimate: Polyline? = null
+    private var plannedRoute: List<RoutePoint> = emptyList()
+    private var plannedLine: Polyline? = null
+
+    fun setContentInsets(top: Int, bottom: Int) {
+        topContentInsetPx = top; bottomContentInsetPx = bottom
+        googleMap?.setPadding(0, top, 0, bottom)
+    }
+
+    fun setPlannedRoute(points: List<RoutePoint>) {
+        plannedRoute = points
+        val map = googleMap ?: return
+        val line = plannedLine ?: map.addPolyline(PolylineOptions().width(6f)
+            .color(Color.parseColor("#57DCB5")).zIndex(1f)).also { plannedLine = it }
+        line.points = points.map { LatLng(it.lat, it.lon) }
+        if (points.isNotEmpty() && pending == null) {
+            val bounds = com.google.android.gms.maps.model.LatLngBounds.builder()
+            points.forEach { bounds.include(LatLng(it.lat, it.lon)) }
+            view.post { if (view.width > 0 && view.height > 0 && pending == null)
+                runCatching { map.moveCamera(CameraUpdateFactory.newLatLngBounds(bounds.build(), 48)) } }
+        }
+    }
     private val routeGlows = ArrayList<Polyline>()
     private val routeLines = ArrayList<Polyline>()
     private var uncertainty: Circle? = null
@@ -66,6 +87,7 @@ class GoogleMapRenderer(
         view.getMapAsync { map ->
             googleMap = map
             configure(map)
+            setPlannedRoute(plannedRoute)
             pending?.let(::draw)
             map.setOnMapLoadedCallback {
                 mapLoaded = true

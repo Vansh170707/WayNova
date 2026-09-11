@@ -67,6 +67,11 @@ data class RuntimeConfig(
 /** One speed prediction: the mean the filter fuses, and the sigma that decides how far. */
 data class SpeedEstimate(val speed: Double, val sigma: Double)
 
+/** Small boundary that lets the navigation loop test speed-fusion policy independently. */
+fun interface SpeedPredictionModel {
+    fun predict(window: FeatureWindow): SpeedEstimate
+}
+
 /**
  * The exported speed TCN, wrapped with its standardisation and uncertainty calibration.
  *
@@ -79,7 +84,7 @@ class SpeedModel(
     context: Context,
     val config: RuntimeConfig,
     assetName: String = "speed_tcn.onnx",
-) : AutoCloseable {
+) : AutoCloseable, SpeedPredictionModel {
 
     private val env: OrtEnvironment = OrtEnvironment.getEnvironment()
     private val session: OrtSession
@@ -101,7 +106,7 @@ class SpeedModel(
     }
 
     /** Standardise the window, run the graph, and calibrate the result. */
-    fun predict(window: FeatureWindow): SpeedEstimate {
+    override fun predict(window: FeatureWindow): SpeedEstimate {
         window.writeStandardised(config.scalerMean, config.scalerStd, buffer)
         return predictStandardised(buffer)
     }

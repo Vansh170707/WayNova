@@ -11,7 +11,8 @@
 
     <application
         android:allowBackup="false"
-        android:label="NeuroNav-X Logger"
+        android:label="Waynova"
+        android:icon="@drawable/ic_waynova"
         android:supportsRtl="true"
         android:theme="@android:style/Theme.Material.Light">
         <meta-data
@@ -21,23 +22,26 @@
             android:name="com.google.android.gms.version"
             android:value="@integer/google_play_services_version" />
         <activity
-            android:name=".MainActivity"
+            android:name=".DashboardActivity"
             android:exported="true"
+            android:theme="@style/Theme.NeuroNavX.Navigation"
             android:screenOrientation="portrait">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <activity android:name=".MainActivity" android:exported="false"
+            android:label="Waynova developer tools" android:screenOrientation="portrait" />
         <activity
             android:name=".NavigationActivity"
             android:exported="false"
-            android:label="NeuroNav-X navigation"
+            android:label="Waynova navigation"
             android:screenOrientation="portrait"
             android:theme="@style/Theme.NeuroNavX.Navigation" />
         <activity
             android:name=".FullLoopBenchmarkActivity"
             android:exported="false"
-            android:label="NeuroNav-X full-loop benchmark" />
+            android:label="Waynova full-loop benchmark" />
     </application>
 </manifest>

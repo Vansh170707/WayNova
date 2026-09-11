@@ -83,6 +83,33 @@ def analyse_summary(summary_path: Path) -> dict:
         if reference_distance > 1.0:
             drift_ratio = 100.0 * incremental_drift / reference_distance
 
+    # Phase 15 live builds expose both sides of speed adaptation. Keep this optional so
+    # every pre-Phase-15 field artifact remains analysable by the same command.
+    speed_adapter = None
+    speed_columns = {
+        "learned_speed_ms", "adapted_speed_ms", "adapted_speed_sigma_ms",
+        "speed_model_bias_ms", "speed_model_calibration_samples",
+    }
+    if speed_columns.issubset(diagnostics.columns):
+        dark = diagnostics.loc[diagnostics["test_phase"].eq("WITHHOLDING")]
+        if len(dark):
+            def finite_mean(column):
+                values = pd.to_numeric(dark[column], errors="coerce")
+                values = values[np.isfinite(values)]
+                return float(values.mean()) if len(values) else None
+
+            samples = pd.to_numeric(
+                dark["speed_model_calibration_samples"], errors="coerce"
+            ).dropna()
+            speed_adapter = {
+                "ready": bool(len(samples) and samples.max() >= 3),
+                "calibration_samples": int(samples.max()) if len(samples) else 0,
+                "bias_ms": finite_mean("speed_model_bias_ms"),
+                "raw_model_speed_mean_ms": finite_mean("learned_speed_ms"),
+                "adapted_speed_mean_ms": finite_mean("adapted_speed_ms"),
+                "adapted_sigma_mean_ms": finite_mean("adapted_speed_sigma_ms"),
+            }
+
     modes = diagnostics["mode"].dropna().astype(str)
     phases = diagnostics["test_phase"].dropna().astype(str)
     writer_ok = summary.get("raw_writer_error") is None and \
@@ -114,6 +141,8 @@ def analyse_summary(summary_path: Path) -> dict:
         "incremental_outage_drift_m": incremental_drift,
         "incremental_drift_ratio_pct": drift_ratio,
         "under_10pct_candidate": bool(drift_ratio is not None and drift_ratio < 10.0),
+        "completed_under_10pct": bool(complete and drift_ratio is not None and drift_ratio < 10.0),
+        "sensor_gap_s": _finite(summary.get("sensor_gap_s")),
         "recovered": recovered,
         "reacquire_s": _finite(test.get("reacquire_s")),
         "saw_blackout": "BLACKOUT" in set(modes),
@@ -122,6 +151,8 @@ def analyse_summary(summary_path: Path) -> dict:
         "completion_checks": completion_checks,
         "diagnostic_test_phases": list(dict.fromkeys(phases)),
     })
+    if speed_adapter is not None:
+        result["speed_model_adapter"] = speed_adapter
     return result
 
 
@@ -162,7 +193,24 @@ def print_report(report: dict) -> None:
     )
     gate = report["incremental_drift_ratio_pct"]
     if gate is not None:
-        print("  <10% phone-reference target: " + ("CANDIDATE PASS" if gate < 10 else "ABOVE TARGET"))
+        verdict = "ABOVE TARGET" if gate >= 10 else (
+            "CANDIDATE PASS" if report["completed_under_10pct"] else "PARTIAL ONLY (test incomplete)"
+        )
+        print("  <10% phone-reference target: " + verdict)
+    adapter = report.get("speed_model_adapter")
+    if adapter:
+        print(
+            "  speed adapter %s (%d pairs): bias %s m/s | raw %s -> adapted %s m/s"
+            % (
+                "ready" if adapter["ready"] else "not ready",
+                adapter["calibration_samples"],
+                "n/a" if adapter["bias_ms"] is None else f"{adapter['bias_ms']:.2f}",
+                "n/a" if adapter["raw_model_speed_mean_ms"] is None else
+                    f"{adapter['raw_model_speed_mean_ms']:.2f}",
+                "n/a" if adapter["adapted_speed_mean_ms"] is None else
+                    f"{adapter['adapted_speed_mean_ms']:.2f}",
+            )
+        )
 
 
 if __name__ == "__main__":

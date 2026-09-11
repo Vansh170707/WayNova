@@ -1,4 +1,4 @@
-# NeuroNav-X — SIH26168
+# Waynova — SIH26168
 
 AI/ML-based intelligent dead reckoning for seamless navigation through GNSS-denied conditions
 (ISRO, Smart India Hackathon 2026).
@@ -17,7 +17,15 @@ files are fetched from the dataset's Git LFS media endpoint into `data/raw/IO-VN
 
 ## Current state
 
-Phases 1–14 are implemented through field-derived Android robustness. The complete estimator now
+Round-two prototype: the app now opens on a Waynova dashboard with saved-drive history,
+an explicitly labelled recorded demo, online place search and an OSRM driving-route preview.
+Saved route geometry and maneuver lists remain available offline; no live voice guidance,
+traffic or automatic rerouting is claimed. Navigation saves when leaving the foreground.
+See [round-two implementation and acceptance checklist](docs/phase17_round_two.md).
+The latest September 7 completed tests measured 26.5% and 69.9% drift: outage accuracy is
+**not yet at the below-10% field target**, and UI upgrades do not change those field results.
+
+Phases 1–16 are implemented through field-derived Android robustness. The complete estimator now
 runs in the Android app and matches the Python reference below 0.1 m on three replay routes
 across two drivers. A full-loop benchmark screen exercises 100 Hz callback overhead, online
 calibration, TCN, ES-EKF, blackout management and display smoothing. Physical-device Gate 5
@@ -25,8 +33,16 @@ is closed on a V2422 ARM64 phone (0.177 ms p95 against a 100 ms budget). The fir
 60-second field outage completed and recovered at 19.2% drift; a later run regressed to 114.0%
 when aided course updates corrupted the live gyro-bias state. A following session exposed an
 unrelated projected-calibration gate and a NaN MapLibre crash. Phase 14 fixes all three causes
-and adds direct live bias/scale diagnostics. **One physical repeat with the corrected APK
-remains open.** See
+and adds direct live bias/scale diagnostics. Two September 3 repeats confirmed stable heading
+(2.9–4.8 degree median error) and recovery in about three seconds, but exposed a stable
++4.5–5 m/s live TCN bias that produced 61% and 86% drift. Phase 15 now learns that additive
+bias from aided model/GNSS pairs, guards blackout speed changes and logs raw versus adapted
+speed. September 5 tests exposed speed-regime changes, stationary drift and a long sensor
+gap. Phase 16 adds motion-aware recent calibration, a conservative stationary hold and
+explicit recalibration after sensor interruption. The newest saved drive replays at
+25.0% drift versus its original 55.7%, but other difficult sessions remain unresolved.
+**A completed below-10% physical field test remains open.** See
+`docs/phase16_motion_and_interruptions.md` for the new build and replay limitations, and
 `docs/phase8_real_device_validation.md` for the field protocol and acceptance criteria.
 
 Phase 10 retrained with the corrected representative validation split. It improved median
@@ -94,7 +110,7 @@ headroom that is already there.
 
 `mobile/` holds the Android logger, complete navigation UI, Google/MapLibre/PMTiles basemaps,
 replay fallback, automatic live-session evidence recorder and full-loop benchmark. It
-**builds and passes 18/18 tests on a physical Android 16 ARM64 V2422**, including the bundled
+**builds and passes 21/21 tests on a physical Android 16 ARM64 V2422**, including the bundled
 Greater Noida offline-map integrity check; desktop/Android parity is below 0.1 m on three
 routes across two drivers.
 
@@ -128,6 +144,8 @@ remaining field gate is empirical execution of that controlled test on the vehic
 - `docs/phase12_controlled_field_blackout.md` — scored live GNSS withholding and calibration gate
 - `docs/phase13_native_heading.md` — full-rate Android yaw, tilt-safe projection and field regression
 - `docs/phase14_field_robustness.md` — field crash, calibration-tie and gyro-state corrections
+- `docs/phase15_live_speed_adaptation.md` — field-derived TCN bias correction and guarded fusion
+- `docs/phase16_motion_and_interruptions.md` — recent speed calibration, stationary hold and sensor-gap recovery
 - `outputs/` — plots, metrics, checkpoints, inventories (gitignored)
 
 ## Non-obvious things the audit established

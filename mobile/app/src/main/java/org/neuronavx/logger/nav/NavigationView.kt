@@ -80,6 +80,28 @@ class NavigationView @JvmOverloads constructor(
     }
 
     private var east = DoubleArray(0)
+    private var plannedEast = DoubleArray(0)
+    private var plannedNorth = DoubleArray(0)
+    private var plannedPoints: List<RoutePoint> = emptyList()
+    private var routeOriginLat = Double.NaN
+    private var routeOriginLon = Double.NaN
+    private val plannedPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE; strokeWidth = 5f; color = Color.parseColor("#57DCB5")
+        strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND
+    }
+
+    fun setPlannedRoute(points: List<RoutePoint>, originLat: Double, originLon: Double) {
+        if (points === plannedPoints && originLat == routeOriginLat && originLon == routeOriginLon) return
+        plannedPoints = points; routeOriginLat = originLat; routeOriginLon = originLon
+        val valid = originLat.isFinite() && originLon.isFinite()
+        plannedEast = if (valid) points.map {
+            Math.toRadians(it.lon - originLon) * 6378137.0 * cos(Math.toRadians(originLat))
+        }.toDoubleArray() else DoubleArray(0)
+        plannedNorth = if (valid) points.map {
+            Math.toRadians(it.lat - originLat) * 6378137.0
+        }.toDoubleArray() else DoubleArray(0)
+        recomputeBounds(); postInvalidateOnAnimation()
+    }
     private var north = DoubleArray(0)
     private var dispEast = DoubleArray(0)
     private var dispNorth = DoubleArray(0)
@@ -117,11 +139,12 @@ class NavigationView @JvmOverloads constructor(
         east = DoubleArray(0); north = DoubleArray(0)
         dispEast = DoubleArray(0); dispNorth = DoubleArray(0)
         dark = BooleanArray(0); markerE = Double.NaN; markerN = Double.NaN
+        recomputeBounds()
         postInvalidateOnAnimation()
     }
 
     private fun recomputeBounds() {
-        if (east.isEmpty()) return
+        if (east.isEmpty() && plannedEast.isEmpty()) return
         var lo0 = Double.MAX_VALUE; var hi0 = -Double.MAX_VALUE
         var lo1 = Double.MAX_VALUE; var hi1 = -Double.MAX_VALUE
         for (i in east.indices) {
@@ -130,9 +153,13 @@ class NavigationView @JvmOverloads constructor(
             lo0 = min(lo0, e); hi0 = max(hi0, e)
             lo1 = min(lo1, n); hi1 = max(hi1, n)
         }
+        for (i in plannedEast.indices) {
+            lo0 = min(lo0, plannedEast[i]); hi0 = max(hi0, plannedEast[i])
+            lo1 = min(lo1, plannedNorth[i]); hi1 = max(hi1, plannedNorth[i])
+        }
         if (lo0 > hi0) return
         // include the confidence circle so a large one is never clipped off-screen
-        val pad = max(sigmaM, 20.0)
+        val pad = max(sigmaM.takeIf { it.isFinite() } ?: 0.0, 20.0)
         minE = lo0 - pad; maxE = hi0 + pad
         minN = lo1 - pad; maxN = hi1 + pad
     }
@@ -162,7 +189,7 @@ class NavigationView @JvmOverloads constructor(
         super.onDraw(canvas)
         canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), backgroundPaint)
         drawAmbientGrid(canvas)
-        if (east.isEmpty()) {
+        if (east.isEmpty() && plannedEast.isEmpty()) {
             drawEmptyState(canvas)
             return
         }
@@ -179,6 +206,7 @@ class NavigationView @JvmOverloads constructor(
         minN = cy - usableH / scale / 2.0; maxN = cy + usableH / scale / 2.0
 
         drawScaleBar(canvas)
+        canvas.drawPath(pathOf(plannedEast, plannedNorth, 0, plannedEast.size), plannedPaint)
 
         // faint: what the filter believes; bright: what a user is shown
         canvas.drawPath(pathOf(dispEast, dispNorth, 0, dispEast.size), trackGlowPaint)

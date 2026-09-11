@@ -12,8 +12,8 @@ android {
         applicationId = "org.neuronavx.logger"
         minSdk = 26          // elapsedRealtimeNanos on Location, and modern sensor batching
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1"
+        versionCode = 17
+        versionName = "0.2-round2"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         // ONNX Runtime ships native libraries for four ABIs, which alone made the debug

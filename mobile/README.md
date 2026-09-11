@@ -1,4 +1,14 @@
-# NeuroNav-X Android — logger, live navigation and full-loop benchmark
+# Waynova Android — live positioning, route preview and drive evidence
+
+Round-two entry point: **Waynova home → Open live navigation**, **Watch the recorded demo**,
+or **Find a destination**. The logger and benchmarks remain under **Tools**. Destination
+search uses Android's geocoder; coordinates are a fallback. Driving-route requests use the
+public OSRM demo service only after confirmation. This is a preview plus saved maneuver
+list, not production turn-by-turn guidance. See `../docs/phase17_round_two.md` for limits.
+
+The current build saves and stops a live session when the screen leaves the foreground;
+keep Waynova visible during a test. Incomplete controlled tests are marked interrupted.
+The screen remains awake while live navigation or the demo is running.
 
 The premium navigation screen supports Google Maps, a bundled fully offline MapLibre/PMTiles
 map of Greater Noida, and the built-in trajectory canvas. See [OFFLINE_MAPS.md](OFFLINE_MAPS.md)
