@@ -14,6 +14,7 @@ import android.widget.ScrollView
 import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import java.text.SimpleDateFormat
@@ -56,6 +57,7 @@ class DashboardActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        WindowCompat.setDecorFitsSystemWindows(window, false)
         WindowInsetsControllerCompat(window, window.decorView).apply {
             isAppearanceLightStatusBars = false
             isAppearanceLightNavigationBars = false
@@ -66,16 +68,17 @@ class DashboardActivity : ComponentActivity() {
             isFillViewport = true
             clipToPadding = false
         }
-        ViewCompat.setOnApplyWindowInsetsListener(scroll) { v, insets ->
-            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
-            v.setPadding(0, bars.top, 0, bars.bottom)
-            insets
-        }
 
         val root = column().apply {
-            setPadding(dp(20), dp(20), dp(20), dp(32))
+            setPadding(dp(20), dp(16), dp(20), dp(32))
         }
         scroll.addView(root)
+
+        ViewCompat.setOnApplyWindowInsetsListener(scroll) { _, insets ->
+            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
+            root.setPadding(dp(20), bars.top + dp(14), dp(20), bars.bottom + dp(32))
+            insets
+        }
 
         // 1. Top Avionics Header
         val header = LinearLayout(this).apply {
