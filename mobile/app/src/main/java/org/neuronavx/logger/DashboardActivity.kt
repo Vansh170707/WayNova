@@ -171,6 +171,38 @@ class DashboardActivity : ComponentActivity() {
         hero.addView(secondaryBtn, margin(10))
         root.addView(hero, margin(16))
 
+        // 3b. AI Sentinel & Voice Supervisor Banner
+        val sentinelCard = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(16), dp(13), dp(16), dp(13))
+            background = pill(surfaceBase, dp(18), borderSubtle)
+
+            val icon = text("🛡", 18f, accentEmerald).apply {
+                setPadding(0, 0, dp(12), 0)
+            }
+            addView(icon)
+
+            val textCol = LinearLayout(this@DashboardActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                addView(text("AI NAVIGATION SENTINEL // VOICE CO-PILOT", 9.5f, accentEmerald, bold = true).apply {
+                    letterSpacing = 0.12f
+                })
+                addView(text("Active mount integrity, road shock gating & offline voice telemetry.", 11.5f, textSecondary).apply {
+                    setPadding(0, dp(2), 0, 0)
+                })
+            }
+            addView(textCol, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+
+            val statusBadge = text("● ACTIVE", 9f, accentEmerald, bold = true).apply {
+                letterSpacing = 0.08f
+                setPadding(dp(8), dp(4), dp(8), dp(4))
+                background = pill(accentEmeraldDim, dp(8), borderSubtle)
+            }
+            addView(statusBadge)
+        }
+        root.addView(sentinelCard, margin(12))
+
         // 4. Quick Actions / Destination & Offline Sector Card
         val utilityRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL

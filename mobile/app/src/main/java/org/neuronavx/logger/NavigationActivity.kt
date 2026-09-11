@@ -48,6 +48,9 @@ import org.neuronavx.logger.nav.SpeedModel
 import org.neuronavx.logger.nav.RoutePlan
 import org.neuronavx.logger.nav.RoutePoint
 import org.neuronavx.logger.nav.EnuMapProjection
+import org.neuronavx.logger.nav.AvionicsVoiceCoPilot
+import org.neuronavx.logger.nav.SentinelReport
+import org.neuronavx.logger.nav.SentinelState
 import org.json.JSONObject
 import java.io.File
 import kotlin.concurrent.thread
@@ -81,6 +84,12 @@ class NavigationActivity : ComponentActivity() {
     private lateinit var headingMetric: MetricViews
     private lateinit var uncertaintyMetric: MetricViews
     private lateinit var routeButton: TextView
+    private lateinit var voiceButton: TextView
+    private lateinit var sentinelChip: TextView
+    private lateinit var voiceCoPilot: AvionicsVoiceCoPilot
+    private var prevNavMode: NavMode = NavMode.AIDED
+    private var prevSentinelState: SentinelState = SentinelState.NOMINAL
+    private var announcedMissionStart = false
     private var plannedRoute: RoutePlan? = null
     private var mapBottomInsetPx = 0
 
@@ -115,6 +124,7 @@ class NavigationActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        voiceCoPilot = AvionicsVoiceCoPilot(this)
         configureWindow()
         setContentView(buildNavigationShell())
         googleMapRenderer?.onCreate(savedInstanceState)
@@ -429,6 +439,23 @@ class NavigationActivity : ComponentActivity() {
             addView(mapSourceBadge, LinearLayout.LayoutParams(WRAP, dp(38)).apply {
                 marginStart = dp(5)
             })
+
+            voiceButton = actionText("🔊", 16f, dp(38)).apply {
+                contentDescription = "Toggle offline avionics voice co-pilot"
+                setOnClickListener {
+                    performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
+                    val muted = voiceCoPilot.toggleMute()
+                    text = if (muted) "🔇" else "🔊"
+                    Toast.makeText(
+                        this@NavigationActivity,
+                        if (muted) "Voice Co-Pilot Muted" else "Voice Co-Pilot Enabled",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
+            }
+            addView(voiceButton, LinearLayout.LayoutParams(dp(38), dp(38)).apply {
+                marginStart = dp(5)
+            })
         }
     }
 
@@ -454,6 +481,14 @@ class NavigationActivity : ComponentActivity() {
                 letterSpacing = 0.16f
             }
             statusHeader.addView(eyebrow, LinearLayout.LayoutParams(0, WRAP, 1f))
+
+            sentinelChip = label("● SENTINEL: NOMINAL", 8.5f, ACCENT_GREEN, Typeface.BOLD).apply {
+                letterSpacing = 0.06f
+                gravity = Gravity.CENTER
+                setPadding(dp(7), dp(3), dp(7), dp(3))
+                background = pill(SURFACE_SOFT, dp(10), withAlpha(ACCENT_GREEN, 120))
+            }
+            statusHeader.addView(sentinelChip)
             addView(statusHeader)
 
             headline = label("Position Locked · Estimator Ready", 19f, TEXT_PRIMARY, Typeface.BOLD)
@@ -832,6 +867,9 @@ class NavigationActivity : ComponentActivity() {
             return
         }
         stopLive()
+        announcedMissionStart = false
+        prevNavMode = NavMode.AIDED
+        prevSentinelState = SentinelState.NOMINAL
         setActions(replayRunning = true, liveRunning = false)
         stopRequested = false
         failure = null
@@ -917,6 +955,9 @@ class NavigationActivity : ComponentActivity() {
             return
         }
         stopReplay()
+        announcedMissionStart = false
+        prevNavMode = NavMode.AIDED
+        prevSentinelState = SentinelState.NOMINAL
         plannedRoute?.let { applyRoute(it, save = false) }
         try {
             val runtime = RuntimeConfig.fromAsset(this)
@@ -1049,6 +1090,36 @@ class NavigationActivity : ComponentActivity() {
         }
 
         calibrationProgress.visibility = View.GONE
+
+        // AI Navigation Sentinel Telemetry Update
+        val rep = s.sentinel
+        if (rep != null) {
+            val color = Color.parseColor(rep.badgeColorHex)
+            sentinelChip.text = rep.shortBadgeText
+            sentinelChip.setTextColor(color)
+            sentinelChip.background = pill(SURFACE_SOFT, dp(10), withAlpha(color, 140))
+        }
+
+        // Avionics Voice Co-Pilot Event Triggers
+        if (s.phase == Navigator.Phase.NAVIGATING && !announcedMissionStart) {
+            announcedMissionStart = true
+            voiceCoPilot.onMissionStart()
+        }
+        if (prevNavMode == NavMode.AIDED && s.mode == NavMode.BLACKOUT) {
+            voiceCoPilot.onBlackoutEnter(s.speed.coerceAtLeast(0.0) * 3.6)
+        } else if (prevNavMode == NavMode.BLACKOUT && s.mode == NavMode.REACQUIRING) {
+            voiceCoPilot.onReacquiring()
+        }
+        if (rep != null) {
+            if (rep.state == SentinelState.MULTIPATH_GUARDED && prevSentinelState != SentinelState.MULTIPATH_GUARDED) {
+                voiceCoPilot.onMultipathRejected()
+            } else if (rep.state == SentinelState.ROAD_TRANSIENT && prevSentinelState != SentinelState.ROAD_TRANSIENT) {
+                voiceCoPilot.onRoadShock()
+            }
+            prevSentinelState = rep.state
+        }
+        prevNavMode = s.mode
+
         val headingDeg = if (s.heading.isFinite())
             ((Math.toDegrees(s.heading) + 360.0) % 360.0).roundToInt().toString() else "—"
         setMetric(headingMetric, headingDeg, "DEG")
@@ -1148,6 +1219,12 @@ class NavigationActivity : ComponentActivity() {
         setMetric(uncertaintyMetric, "—", "M 1σ")
         contextLine.text = "ESTIMATOR READY  •  PROCESSING STAYS ON DEVICE"
         calibrationProgress.visibility = View.GONE
+        sentinelChip.text = "● SENTINEL: STANDBY"
+        sentinelChip.setTextColor(TEXT_SECONDARY)
+        sentinelChip.background = pill(SURFACE_SOFT, dp(10), BORDER_SUBTLE)
+        prevNavMode = NavMode.AIDED
+        prevSentinelState = SentinelState.NOMINAL
+        announcedMissionStart = false
         setActions(replayRunning = false, liveRunning = false)
     }
 
@@ -1294,6 +1371,7 @@ class NavigationActivity : ComponentActivity() {
         replayThread?.join(1000)
         googleMapRenderer?.onDestroy()
         mapLibreRenderer?.onDestroy()
+        voiceCoPilot.shutdown()
         super.onDestroy()
     }
 

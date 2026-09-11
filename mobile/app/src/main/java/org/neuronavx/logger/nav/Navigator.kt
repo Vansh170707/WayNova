@@ -82,6 +82,7 @@ class Navigator(
         val headingRateSource: HeadingRateSource,
         val stationaryHoldActive: Boolean = false,
         val sensorInterruptions: Int = 0,
+        val sentinel: SentinelReport? = null,
     )
 
     private val nativeHeadingContract = inputRateHz > runtime.rateHz * 1.5
@@ -149,6 +150,7 @@ class Navigator(
     private var justInitialized = false
     private var learned = SpeedEstimate(Double.NaN, Double.NaN)
     private var adaptedLearned = AdaptedSpeedEstimate(Double.NaN, Double.NaN)
+    private val sentinel = NavSentinel()
 
     /** ENU origin, taken from the first usable fix. */
     var originLat = Double.NaN; private set
@@ -206,7 +208,7 @@ class Navigator(
             learned = SpeedEstimate(Double.NaN, Double.NaN)
             adaptedLearned = AdaptedSpeedEstimate(Double.NaN, Double.NaN)
             nativeHeadingRate.reset(); window.reset(); liveSpeedAdapter.reset()
-            stationaryHold.reset(); smoother.reset(); blackout.reset(t)
+            stationaryHold.reset(); smoother.reset(); blackout.reset(t); sentinel.reset()
             trackEast.clear(); trackNorth.clear(); trackDark.clear()
             displayEastTrack.clear(); displayNorthTrack.clear()
         }
@@ -357,6 +359,17 @@ class Navigator(
         displayEastTrack.add(smoother.east); displayNorthTrack.add(smoother.north)
         trackDark.add(blackout.mode != NavMode.AIDED)
 
+        val sentinelReport = sentinel.evaluate(
+            t = t,
+            dt = if (dt > 0.0) dt else 0.1,
+            accel = accel,
+            gravity = gravity,
+            gyro = gyro,
+            navMode = blackout.mode,
+            tcnSigma = if (learned.sigma.isFinite()) learned.sigma else 0.5,
+            rejectedFixes = ekf.rejected,
+        )
+
         val s = State(
             t = t, phase = phase, mode = blackout.mode,
             east = ekf.east, north = ekf.north,
@@ -379,6 +392,7 @@ class Navigator(
             headingRateSource = headingRateSource,
             stationaryHoldActive = holdStopped,
             sensorInterruptions = sensorInterruptions,
+            sentinel = sentinelReport,
         )
         state = s
         lastT = t
@@ -410,6 +424,16 @@ class Navigator(
             gyroScaleError = Double.NaN,
             headingRateSource = headingRateSource,
             sensorInterruptions = sensorInterruptions,
+            sentinel = sentinel.evaluate(
+                t = t,
+                dt = 0.1,
+                accel = DoubleArray(3),
+                gravity = DoubleArray(3),
+                gyro = DoubleArray(3),
+                navMode = NavMode.AIDED,
+                tcnSigma = 0.5,
+                rejectedFixes = 0,
+            ),
         )
         state = s
         return s
