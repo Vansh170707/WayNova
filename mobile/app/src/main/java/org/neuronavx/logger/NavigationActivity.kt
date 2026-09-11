@@ -3,6 +3,7 @@ package org.neuronavx.logger
 import android.content.res.ColorStateList
 import android.Manifest
 import android.app.AlertDialog
+import java.util.Locale
 import android.location.LocationManager
 import android.content.Context
 import android.view.WindowManager
@@ -152,7 +153,7 @@ class NavigationActivity : ComponentActivity() {
         if (mapsConfigured() && GoogleMapRenderer.playServicesAvailable(this)) {
             googleMapRenderer = GoogleMapRenderer(
                 context = this,
-                topContentInsetPx = dp(126),
+                topContentInsetPx = dp(76),
                 bottomContentInsetPx = dp(328),
             ) {
                 ui.post {
@@ -165,52 +166,18 @@ class NavigationActivity : ComponentActivity() {
         }
 
         map = NavigationView(this).apply {
-            // The canvas remains visible behind the overlays but keeps important content
-            // out from under the header and the telemetry panel.
-            setPadding(dp(18), dp(126), dp(18), dp(328))
+            setPadding(dp(16), dp(76), dp(16), dp(328))
             contentDescription = "Waynova estimated track and uncertainty map"
         }
         root.addView(map, FrameLayout.LayoutParams(MATCH, MATCH))
 
-        root.addView(buildHeader(), FrameLayout.LayoutParams(MATCH, dp(68)).apply {
+        // Unified Top Floating Glass Island
+        root.addView(buildTopBar(), FrameLayout.LayoutParams(MATCH, dp(52)).apply {
             gravity = Gravity.TOP
-            setMargins(dp(16), dp(12), dp(16), 0)
+            setMargins(dp(14), dp(10), dp(14), 0)
         })
 
-        modeBadge = label("●  STANDBY", 11f, TEXT_PRIMARY, Typeface.BOLD).apply {
-            letterSpacing = 0.12f
-            gravity = Gravity.CENTER
-            setPadding(dp(13), 0, dp(13), 0)
-            background = pill(SURFACE_STRONG, dp(18), BORDER_SUBTLE)
-        }
-        root.addView(modeBadge, FrameLayout.LayoutParams(WRAP, dp(36)).apply {
-            gravity = Gravity.TOP or Gravity.START
-            setMargins(dp(18), dp(92), 0, 0)
-        })
-
-        mapSourceBadge = label(
-            if (googleMapRenderer != null) "MAP CONNECTING" else "OFFLINE PREPARING",
-            10f, TEXT_MUTED, Typeface.BOLD,
-        ).apply {
-            letterSpacing = 0.12f
-            gravity = Gravity.CENTER
-            setPadding(dp(12), 0, dp(12), 0)
-            background = pill(Color.argb(205, 11, 18, 29), dp(18), BORDER_SUBTLE)
-            isClickable = true
-            isFocusable = true
-            contentDescription = "Switch map renderer; long press to import an offline map"
-            setOnClickListener { cycleMapRenderer() }
-            setOnLongClickListener {
-                chooseOfflineMap()
-                true
-            }
-        }
-        root.addView(mapSourceBadge, FrameLayout.LayoutParams(WRAP, dp(36)).apply {
-            gravity = Gravity.TOP or Gravity.END
-            setMargins(0, dp(92), dp(18), 0)
-        })
-
-        recenterButton = actionText("⌖", 25f, dp(48)).apply {
+        recenterButton = actionText("⌖", 22f, dp(44)).apply {
             visibility = View.GONE
             contentDescription = "Recenter map on Waynova position"
             setOnClickListener {
@@ -219,51 +186,43 @@ class NavigationActivity : ComponentActivity() {
                 if (mapLibreActive) mapLibreRenderer?.recenter()
             }
         }
-        root.addView(recenterButton, FrameLayout.LayoutParams(dp(48), dp(48)).apply {
+        root.addView(recenterButton, FrameLayout.LayoutParams(dp(44), dp(44)).apply {
             gravity = Gravity.END or Gravity.BOTTOM
-            setMargins(0, 0, dp(18), dp(342))
+            setMargins(0, 0, dp(16), dp(340))
         })
 
         mapAttribution = label(
-            "MapLibre  ·  © OpenStreetMap  ·  Protomaps",
-            9f, TEXT_SECONDARY, Typeface.BOLD,
+            "MapLibre · © OSM · Protomaps",
+            8.5f, TEXT_MUTED, Typeface.BOLD,
         ).apply {
             letterSpacing = 0.03f
             gravity = Gravity.CENTER
-            setPadding(dp(9), 0, dp(9), 0)
-            background = pill(Color.argb(205, 11, 18, 29), dp(12), BORDER_SUBTLE)
+            setPadding(dp(8), dp(3), dp(8), dp(3))
+            background = pill(SURFACE_STRONG, dp(10), BORDER_SUBTLE)
             visibility = View.GONE
             contentDescription = "Map data OpenStreetMap; map tiles Protomaps; renderer MapLibre"
         }
-        root.addView(mapAttribution, FrameLayout.LayoutParams(WRAP, dp(28)).apply {
+        root.addView(mapAttribution, FrameLayout.LayoutParams(WRAP, dp(24)).apply {
             gravity = Gravity.START or Gravity.BOTTOM
-            setMargins(dp(18), 0, 0, dp(344))
+            setMargins(dp(16), 0, 0, dp(342))
         })
 
-        routeButton = actionButton("⌕  Find destination / directions", primary = false).apply {
-            contentDescription = "Find destination or view saved driving directions"
-            setOnClickListener { onRouteAction() }
-        }
-        root.addView(routeButton, FrameLayout.LayoutParams(MATCH, dp(48)).apply {
-            gravity = Gravity.TOP
-            setMargins(dp(18), dp(140), dp(18), 0)
-        })
         val bottomPanel = buildBottomPanel()
         root.addView(bottomPanel, FrameLayout.LayoutParams(MATCH, WRAP).apply {
             gravity = Gravity.BOTTOM
-            setMargins(dp(12), 0, dp(12), dp(12))
+            setMargins(dp(12), 0, dp(12), dp(10))
         })
         bottomPanel.addOnLayoutChangeListener { _, _, top, _, _, _, _, _, _ ->
-            val bottomInset = root.height - root.paddingBottom - top + dp(12)
+            val bottomInset = root.height - root.paddingBottom - top + dp(10)
             mapBottomInsetPx = bottomInset
-            map.setPadding(dp(18), dp(198), dp(18), bottomInset)
-            googleMapRenderer?.setContentInsets(dp(198), bottomInset)
-            mapLibreRenderer?.setContentInsets(dp(198), bottomInset)
+            map.setPadding(dp(16), dp(76), dp(16), bottomInset)
+            googleMapRenderer?.setContentInsets(dp(76), bottomInset)
+            mapLibreRenderer?.setContentInsets(dp(76), bottomInset)
             (recenterButton.layoutParams as FrameLayout.LayoutParams).also {
                 it.bottomMargin = bottomInset + dp(12); recenterButton.layoutParams = it
             }
             (mapAttribution.layoutParams as FrameLayout.LayoutParams).also {
-                it.bottomMargin = bottomInset + dp(18); mapAttribution.layoutParams = it
+                it.bottomMargin = bottomInset + dp(14); mapAttribution.layoutParams = it
             }
         }
         return root
@@ -280,17 +239,29 @@ class NavigationActivity : ComponentActivity() {
         }
         val route = plannedRoute
         if (route == null) { openRouteSearch(); return }
+
         val directions = android.widget.ListView(this).apply {
             divider = null
-            setPadding(dp(16), 0, dp(16), 0)
-            addHeaderView(label("%.1f km · about %.0f min\nSaved plan · no live turn alerts or traffic".format(
-                route.distanceM / 1000, route.durationS / 60), 14f, ACCENT_GREEN, Typeface.BOLD).apply {
-                setPadding(dp(8), dp(10), dp(8), dp(16))
+            setPadding(dp(16), 0, dp(16), dp(8))
+
+            // Header banner
+            val header = LinearLayout(this@NavigationActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(14), dp(12), dp(14), dp(14))
+                background = pill(SURFACE_SOFT, dp(16), BORDER_SUBTLE)
+                addView(label("OSRM DRIVING ROUTE", 9f, ACCENT_AMBER, Typeface.BOLD).apply { letterSpacing = 0.14f })
+                addView(label("%.1f km · about %.0f min".format(route.distanceM / 1000, route.durationS / 60), 18f, TEXT_PRIMARY, Typeface.BOLD).apply {
+                    setPadding(0, dp(4), 0, dp(2))
+                })
+                addView(label("Saved offline route preview · Follow signs while driving", 11.5f, TEXT_SECONDARY, Typeface.NORMAL))
+            }
+            addHeaderView(header, null, false)
+
+            addFooterView(label("Mint = planned route · Blue/Orange = estimated track\nRoutes: OSRM · © OpenStreetMap (ODbL)",
+                10.5f, TEXT_MUTED, Typeface.NORMAL).apply {
+                setPadding(dp(8), dp(12), dp(8), dp(8))
             }, null, false)
-            addFooterView(label("Mint = planned route · blue/orange = estimated track\nRoutes: OSRM · © OpenStreetMap (ODbL)\nFollow road signs. Set up only while parked.",
-                11f, TEXT_MUTED, Typeface.NORMAL).apply {
-                setPadding(dp(8), dp(14), dp(8), dp(10))
-            }, null, false)
+
             adapter = object : android.widget.BaseAdapter() {
                 override fun getCount() = route.steps.size
                 override fun getItem(position: Int) = route.steps[position]
@@ -298,31 +269,73 @@ class NavigationActivity : ComponentActivity() {
                 override fun isEnabled(position: Int) = false
                 override fun getView(position: Int, convertView: View?, parent: ViewGroup?): View {
                     val row = (convertView as? LinearLayout) ?: LinearLayout(this@NavigationActivity).apply {
-                        orientation = LinearLayout.VERTICAL
-                        setPadding(dp(12), dp(14), dp(12), dp(14))
-                        addView(label("", 14f, TEXT_PRIMARY, Typeface.BOLD))
-                        addView(label("", 12f, TEXT_SECONDARY, Typeface.NORMAL).apply { setPadding(0, dp(5), 0, 0) })
+                        orientation = LinearLayout.HORIZONTAL
+                        gravity = Gravity.CENTER_VERTICAL
+                        setPadding(dp(12), dp(10), dp(12), dp(10))
+
+                        // Directional glyph
+                        addView(label("↑", 17f, ACCENT_AMBER, Typeface.BOLD).apply {
+                            gravity = Gravity.CENTER
+                            layoutParams = LinearLayout.LayoutParams(dp(28), dp(28))
+                        })
+
+                        // Instruction text column
+                        val textCol = LinearLayout(this@NavigationActivity).apply {
+                            orientation = LinearLayout.VERTICAL
+                            setPadding(dp(8), 0, dp(8), 0)
+                            addView(label("", 12.5f, TEXT_PRIMARY, Typeface.BOLD))
+                            addView(label("", 11f, TEXT_SECONDARY, Typeface.NORMAL).apply { setPadding(0, dp(2), 0, 0) })
+                        }
+                        addView(textCol, LinearLayout.LayoutParams(0, WRAP, 1f))
+
+                        // Distance badge
+                        addView(label("", 10f, TEXT_PRIMARY, Typeface.BOLD).apply {
+                            gravity = Gravity.CENTER
+                            setPadding(dp(7), dp(3), dp(7), dp(3))
+                            background = pill(SURFACE_SOFT, dp(8), BORDER_SUBTLE)
+                        })
                     }
+
                     val step = route.steps[position]
-                    (row.getChildAt(0) as TextView).text = "${position + 1}. ${step.instruction}"
-                    (row.getChildAt(1) as TextView).text = if (step.distanceM > 0)
-                        "Continue for %.0f m".format(step.distanceM) else "Destination"
-                    row.background = pill(if (position % 2 == 0) SURFACE_SOFT else NAV_BACKGROUND, dp(12))
+                    val lower = step.instruction.lowercase(Locale.ROOT)
+                    val glyph = when {
+                        lower.contains("roundabout") || lower.contains("rotary") -> "↶"
+                        lower.contains("left") -> "↰"
+                        lower.contains("right") -> "↱"
+                        lower.contains("destination") || lower.contains("arrive") -> "🏁"
+                        else -> "↑"
+                    }
+
+                    val glyphView = row.getChildAt(0) as TextView
+                    glyphView.text = glyph
+                    glyphView.setTextColor(if (glyph == "🏁") ACCENT_GREEN else ACCENT_AMBER)
+
+                    val textCol = row.getChildAt(1) as LinearLayout
+                    (textCol.getChildAt(0) as TextView).text = step.instruction
+                    (textCol.getChildAt(1) as TextView).text = if (step.distanceM > 0)
+                        "Continue along roadway" else "Destination reached"
+
+                    val distBadge = row.getChildAt(2) as TextView
+                    distBadge.text = if (step.distanceM > 0) "%.0f m".format(step.distanceM) else "Arrive"
+
+                    row.background = pill(if (position % 2 == 0) SURFACE_SOFT else Color.parseColor("#12141C"), dp(12))
                     return row
                 }
             }
         }
-        AlertDialog.Builder(this).setTitle(route.destination)
+
+        AlertDialog.Builder(this)
+            .setTitle(route.destination)
             .setView(directions)
             .setPositiveButton("Done", null)
-            .setNeutralButton("New route") { _, _ -> openRouteSearch() }
+            .setNeutralButton("New Route") { _, _ -> openRouteSearch() }
             .setNegativeButton("Clear") { _, _ ->
                 plannedRoute = null
                 File(filesDir, "planned_route.json").delete()
                 googleMapRenderer?.setPlannedRoute(emptyList())
                 mapLibreRenderer?.setPlannedRoute(emptyList())
                 map.setPlannedRoute(emptyList(), Double.NaN, Double.NaN)
-                routeButton.text = "⌕  Find destination / directions"
+                routeButton.text = "⌕  Destination / Route"
                 refreshMapAttribution()
             }.show()
     }
@@ -348,72 +361,109 @@ class NavigationActivity : ComponentActivity() {
         googleMapRenderer?.setPlannedRoute(route.points)
         mapLibreRenderer?.setPlannedRoute(route.points)
         map.setPlannedRoute(route.points, route.points.first().lat, route.points.first().lon)
-        routeButton.text = "↗  OSRM plan · %.1f km · Directions".format(route.distanceM / 1000)
+        routeButton.text = "↗  %.1f km · Directions".format(route.distanceM / 1000)
         refreshMapAttribution()
         if (save) runCatching { File(filesDir, "planned_route.json").writeText(route.toJson().toString()) }
             .onFailure { Toast.makeText(this, "Route loaded but could not be saved for later.", Toast.LENGTH_LONG).show() }
     }
 
-    private fun buildHeader(): View {
+    private fun buildTopBar(): View {
         return LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(10), dp(8), dp(14), dp(8))
-            background = pill(Color.argb(238, 13, 21, 33), dp(22), BORDER_SUBTLE)
+            setPadding(dp(6), dp(5), dp(8), dp(5))
+            background = pill(SURFACE_STRONG, dp(20), BORDER_SUBTLE)
             elevation = dp(8).toFloat()
 
-            addView(actionText("‹", 29f, dp(44)).apply {
-                contentDescription = "Back"
+            val back = actionText("‹", 26f, dp(38)).apply {
+                contentDescription = "Back to dashboard"
                 setOnClickListener { finish() }
+            }
+            addView(back, LinearLayout.LayoutParams(dp(38), dp(38)))
+
+            routeButton = TextView(this@NavigationActivity).apply {
+                text = "⌕  Destination / Directions"
+                textSize = 12f
+                setTextColor(TEXT_PRIMARY)
+                typeface = Typeface.create("sans-serif", Typeface.BOLD)
+                maxLines = 1
+                ellipsize = android.text.TextUtils.TruncateAt.END
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(10), 0, dp(10), 0)
+                background = pill(SURFACE_SOFT, dp(14), BORDER_SUBTLE)
+                isClickable = true
+                isFocusable = true
+                contentDescription = "Find destination or view saved driving directions"
+                setOnClickListener { onRouteAction() }
+            }
+            addView(routeButton, LinearLayout.LayoutParams(0, dp(38), 1f).apply {
+                marginStart = dp(6)
+                marginEnd = dp(6)
             })
 
-            addView(LinearLayout(this@NavigationActivity).apply {
-                orientation = LinearLayout.VERTICAL
-                gravity = Gravity.CENTER_VERTICAL
-                setPadding(dp(10), 0, 0, 0)
-                addView(label("WAYNOVA", 17f, TEXT_PRIMARY, Typeface.BOLD).apply {
-                    letterSpacing = 0.11f
-                })
-                addView(label("RESILIENT POSITIONING", 9f, TEXT_MUTED, Typeface.BOLD).apply {
-                    letterSpacing = 0.18f
-                })
-            }, LinearLayout.LayoutParams(0, MATCH, 1f))
-
-            addView(label("W", 18f, ACCENT_BLUE, Typeface.BOLD).apply {
-                gravity = Gravity.CENTER
+            modeBadge = label("● STANDBY", 9.5f, TEXT_SECONDARY, Typeface.BOLD).apply {
                 letterSpacing = 0.08f
-                background = pill(Color.parseColor("#162A45"), dp(14), Color.parseColor("#31547C"))
-            }, LinearLayout.LayoutParams(dp(44), dp(44)))
+                gravity = Gravity.CENTER
+                setPadding(dp(8), 0, dp(8), 0)
+                background = pill(SURFACE_SOFT, dp(14), BORDER_SUBTLE)
+            }
+            addView(modeBadge, LinearLayout.LayoutParams(WRAP, dp(38)))
+
+            mapSourceBadge = label(
+                if (googleMapRenderer != null) "GOOGLE MAP" else "OFFLINE GN",
+                9f, ACCENT_GREEN, Typeface.BOLD
+            ).apply {
+                letterSpacing = 0.06f
+                gravity = Gravity.CENTER
+                setPadding(dp(8), 0, dp(8), 0)
+                background = pill(SURFACE_SOFT, dp(14), BORDER_SUBTLE)
+                isClickable = true
+                isFocusable = true
+                contentDescription = "Switch map renderer; long press to import an offline map"
+                setOnClickListener { cycleMapRenderer() }
+                setOnLongClickListener {
+                    chooseOfflineMap()
+                    true
+                }
+            }
+            addView(mapSourceBadge, LinearLayout.LayoutParams(WRAP, dp(38)).apply {
+                marginStart = dp(5)
+            })
         }
     }
 
     private fun buildBottomPanel(): View {
         return LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(16), dp(10), dp(16), dp(16))
-            background = pill(Color.argb(250, 14, 22, 34), dp(28), BORDER_SUBTLE)
+            setPadding(dp(18), dp(10), dp(18), dp(16))
+            background = pill(SURFACE_STRONG, dp(26), BORDER_SUBTLE)
             elevation = dp(16).toFloat()
 
             addView(View(this@NavigationActivity).apply {
-                background = pill(Color.parseColor("#40516A"), dp(3))
-            }, LinearLayout.LayoutParams(dp(38), dp(4)).apply {
+                background = pill(Color.parseColor("#3B4459"), dp(2))
+            }, LinearLayout.LayoutParams(dp(36), dp(4)).apply {
                 gravity = Gravity.CENTER_HORIZONTAL
-                bottomMargin = dp(12)
+                bottomMargin = dp(10)
             })
 
+            val statusHeader = LinearLayout(this@NavigationActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
             eyebrow = label("READY", 10f, ACCENT_BLUE, Typeface.BOLD).apply {
                 letterSpacing = 0.16f
             }
-            addView(eyebrow)
+            statusHeader.addView(eyebrow, LinearLayout.LayoutParams(0, WRAP, 1f))
+            addView(statusHeader)
 
-            headline = label("Positioning that keeps going", 23f, TEXT_PRIMARY, Typeface.BOLD)
+            headline = label("Position Locked · Estimator Ready", 19f, TEXT_PRIMARY, Typeface.BOLD)
             addView(headline, LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = dp(2) })
 
             guidance = label(
-                "Start a live session or run the demonstration route.",
-                13f, TEXT_SECONDARY, Typeface.NORMAL
+                "Satellite fixes and IMU motion are strengthening on-device estimate.",
+                12.5f, TEXT_SECONDARY, Typeface.NORMAL
             ).apply { setLineSpacing(0f, 1.15f) }
-            addView(guidance, LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = dp(4) })
+            addView(guidance, LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = dp(3) })
 
             calibrationProgress = ProgressBar(
                 this@NavigationActivity, null, android.R.attr.progressBarStyleHorizontal
@@ -421,11 +471,11 @@ class NavigationActivity : ComponentActivity() {
                 max = 100
                 progress = 0
                 progressTintList = ColorStateList.valueOf(ACCENT_AMBER)
-                progressBackgroundTintList = ColorStateList.valueOf(Color.parseColor("#26364A"))
+                progressBackgroundTintList = ColorStateList.valueOf(Color.parseColor("#262C3B"))
                 visibility = View.GONE
             }
             addView(calibrationProgress, LinearLayout.LayoutParams(MATCH, dp(4)).apply {
-                topMargin = dp(12)
+                topMargin = dp(10)
             })
 
             val metrics = LinearLayout(this@NavigationActivity).apply {
@@ -438,15 +488,16 @@ class NavigationActivity : ComponentActivity() {
             metrics.addView(speedMetric.root, metricParams(endMargin = dp(8)))
             metrics.addView(headingMetric.root, metricParams(endMargin = dp(8)))
             metrics.addView(uncertaintyMetric.root, metricParams())
-            addView(metrics, LinearLayout.LayoutParams(MATCH, dp(72)).apply { topMargin = dp(14) })
+            addView(metrics, LinearLayout.LayoutParams(MATCH, dp(68)).apply { topMargin = dp(12) })
 
-            contextLine = label("ESTIMATOR READY  •  TRACK 0 PTS", 10f, TEXT_MUTED, Typeface.BOLD).apply {
+            contextLine = label("6-DOF ES-EKF  •  SPEED-TCN  •  100 Hz", 9.5f, TEXT_MUTED, Typeface.BOLD).apply {
                 letterSpacing = 0.08f
                 gravity = Gravity.CENTER_VERTICAL
-                maxLines = 3
+                maxLines = 2
             }
             addView(contextLine, LinearLayout.LayoutParams(MATCH, WRAP).apply {
-                topMargin = dp(8); bottomMargin = dp(8)
+                topMargin = dp(8)
+                bottomMargin = dp(8)
             })
 
             val actions = LinearLayout(this@NavigationActivity).apply {
@@ -465,10 +516,10 @@ class NavigationActivity : ComponentActivity() {
                     onSecondaryAction()
                 }
             }
-            actions.addView(liveButton, LinearLayout.LayoutParams(0, dp(54), 1f))
+            actions.addView(liveButton, LinearLayout.LayoutParams(0, dp(50), 1f))
             actions.addView(Space(this@NavigationActivity), LinearLayout.LayoutParams(dp(10), 1))
-            actions.addView(replayButton, LinearLayout.LayoutParams(dp(126), dp(54)))
-            addView(actions, LinearLayout.LayoutParams(MATCH, dp(54)).apply { topMargin = dp(6) })
+            actions.addView(replayButton, LinearLayout.LayoutParams(dp(126), dp(50)))
+            addView(actions, LinearLayout.LayoutParams(MATCH, dp(50)).apply { topMargin = dp(4) })
         }
     }
 
@@ -484,14 +535,16 @@ class NavigationActivity : ComponentActivity() {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(11), dp(8), dp(8), dp(7))
+            setPadding(dp(12), dp(8), dp(10), dp(7))
             background = pill(SURFACE_SOFT, dp(16), BORDER_SUBTLE)
-            addView(label(title, 8f, TEXT_MUTED, Typeface.BOLD).apply { letterSpacing = 0.13f })
+            addView(label(title, 8.5f, TEXT_MUTED, Typeface.BOLD).apply { letterSpacing = 0.12f })
             val line = LinearLayout(this@NavigationActivity).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.BOTTOM
-                value = label("—", 21f, TEXT_PRIMARY, Typeface.BOLD)
-                unit = label("", 8f, TEXT_MUTED, Typeface.BOLD).apply {
+                value = label("—", 22f, TEXT_PRIMARY, Typeface.BOLD).apply {
+                    typeface = Typeface.MONOSPACE
+                }
+                unit = label("", 8.5f, ACCENT_AMBER, Typeface.BOLD).apply {
                     setPadding(dp(4), 0, 0, dp(3))
                     letterSpacing = 0.06f
                 }
@@ -526,14 +579,14 @@ class NavigationActivity : ComponentActivity() {
         }
 
     private fun actionButton(text: String, primary: Boolean): TextView =
-        label(text, 13f, if (primary) Color.WHITE else TEXT_PRIMARY, Typeface.BOLD).apply {
+        label(text, 13.5f, if (primary) Color.parseColor("#0C0D11") else TEXT_PRIMARY, Typeface.BOLD).apply {
             this.text = text
             gravity = Gravity.CENTER
             isClickable = true
             isFocusable = true
-            letterSpacing = 0.02f
-            background = if (primary) ripple(ACCENT_BLUE, dp(17), Color.parseColor("#74AFFF"))
-                else ripple(SURFACE_SOFT, dp(17), Color.parseColor("#3C5069"))
+            letterSpacing = 0.04f
+            background = if (primary) ripple(ACCENT_AMBER, dp(16), Color.parseColor("#E5A93C"))
+                else ripple(SURFACE_SOFT, dp(16), BORDER_PROMINENT)
         }
 
     private fun pill(color: Int, radius: Int, strokeColor: Int? = null): GradientDrawable =
@@ -571,10 +624,10 @@ class NavigationActivity : ComponentActivity() {
         mapLibreRenderer?.view?.visibility = View.INVISIBLE
         map.visibility = View.INVISIBLE
         refreshMapAttribution()
-        mapSourceBadge.text = "GOOGLE MAP  ◆"
+        mapSourceBadge.text = "GOOGLE MAP"
         mapSourceBadge.setTextColor(ACCENT_GREEN)
         mapSourceBadge.background = pill(
-            Color.argb(225, 13, 21, 33), dp(18), withAlpha(ACCENT_GREEN, 125)
+            SURFACE_SOFT, dp(14), withAlpha(ACCENT_GREEN, 150)
         )
         recenterButton.visibility = View.VISIBLE
     }
@@ -586,9 +639,9 @@ class NavigationActivity : ComponentActivity() {
         mapLibreRenderer?.view?.visibility = View.INVISIBLE
         map.visibility = View.VISIBLE
         refreshMapAttribution()
-        mapSourceBadge.text = "LOCAL FALLBACK"
+        mapSourceBadge.text = "CANVAS ONLY"
         mapSourceBadge.setTextColor(TEXT_MUTED)
-        mapSourceBadge.background = pill(Color.argb(225, 13, 21, 33), dp(18), BORDER_SUBTLE)
+        mapSourceBadge.background = pill(SURFACE_SOFT, dp(14), BORDER_SUBTLE)
         recenterButton.visibility = View.GONE
     }
 
@@ -597,7 +650,7 @@ class NavigationActivity : ComponentActivity() {
         val snapshot = latestMapSnapshot
         if (snapshot != null && mapLibreRenderer?.covers(snapshot) == false) {
             showLocalFallback()
-            mapSourceBadge.text = "OUTSIDE OFFLINE AREA"
+            mapSourceBadge.text = "OUTSIDE MAP"
             return
         }
         googleMapActive = false
@@ -606,11 +659,10 @@ class NavigationActivity : ComponentActivity() {
         mapLibreRenderer?.view?.visibility = View.VISIBLE
         map.visibility = View.INVISIBLE
         refreshMapAttribution()
-        val size = OfflineMapStore.installed(this)?.bytes ?: 0L
-        mapSourceBadge.text = "OFFLINE GN  ·  ${OfflineMapStore.formatBytes(size)}"
+        mapSourceBadge.text = "OFFLINE GN"
         mapSourceBadge.setTextColor(ACCENT_GREEN)
         mapSourceBadge.background = pill(
-            Color.argb(225, 13, 21, 33), dp(18), withAlpha(ACCENT_GREEN, 125)
+            SURFACE_SOFT, dp(14), withAlpha(ACCENT_GREEN, 150)
         )
         recenterButton.visibility = View.VISIBLE
     }
@@ -717,7 +769,7 @@ class NavigationActivity : ComponentActivity() {
         val renderer = MapLibreOfflineRenderer(
             context = this,
             archive = installed.file,
-            topContentInsetPx = dp(198),
+            topContentInsetPx = dp(76),
             bottomContentInsetPx = mapBottomInsetPx.takeIf { it > 0 } ?: dp(328),
             onBasemapReady = {
                 ui.post {
@@ -1082,15 +1134,15 @@ class NavigationActivity : ComponentActivity() {
     private fun setMode(label: String, color: Int) {
         modeBadge.text = "●  $label"
         modeBadge.setTextColor(color)
-        modeBadge.background = pill(Color.argb(225, 13, 21, 33), dp(18), withAlpha(color, 135))
+        modeBadge.background = pill(SURFACE_SOFT, dp(14), withAlpha(color, 150))
     }
 
     private fun showIdleState() {
         setMode("STANDBY", TEXT_SECONDARY)
         eyebrow.text = "READY"
         eyebrow.setTextColor(ACCENT_BLUE)
-        headline.text = "Positioning that keeps going"
-        guidance.text = "Start a live session or run the demonstration route."
+        headline.text = "Position Locked · Estimator Ready"
+        guidance.text = "Start a live mission or run the demonstration benchmark."
         setMetric(speedMetric, "—", "KM/H")
         setMetric(headingMetric, "—", "DEG")
         setMetric(uncertaintyMetric, "—", "M 1σ")
@@ -1254,16 +1306,18 @@ class NavigationActivity : ComponentActivity() {
         const val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
         const val WRAP = ViewGroup.LayoutParams.WRAP_CONTENT
 
-        val NAV_BACKGROUND = Color.parseColor("#070B12")
-        val SURFACE_STRONG = Color.parseColor("#E60D1521")
-        val SURFACE_SOFT = Color.parseColor("#172334")
-        val BORDER_SUBTLE = Color.parseColor("#2A3A50")
-        val TEXT_PRIMARY = Color.parseColor("#F5F8FC")
-        val TEXT_SECONDARY = Color.parseColor("#B8C4D4")
-        val TEXT_MUTED = Color.parseColor("#7F90A7")
-        val ACCENT_BLUE = Color.parseColor("#4C9BFF")
-        val ACCENT_GREEN = Color.parseColor("#45D69E")
-        val ACCENT_AMBER = Color.parseColor("#FFAA4C")
-        val ACCENT_RED = Color.parseColor("#FF657A")
+        val NAV_BACKGROUND = Color.parseColor("#0C0D11")
+        val SURFACE_STRONG = Color.parseColor("#EE14161E")
+        val SURFACE_SOFT = Color.parseColor("#1B1F2A")
+        val BORDER_SUBTLE = Color.parseColor("#262C3B")
+        val BORDER_PROMINENT = Color.parseColor("#3A4459")
+        val TEXT_PRIMARY = Color.parseColor("#F7F5F0")
+        val TEXT_SECONDARY = Color.parseColor("#9EA4B1")
+        val TEXT_MUTED = Color.parseColor("#697386")
+        val ACCENT_BLUE = Color.parseColor("#38BDF8")
+        val ACCENT_GREEN = Color.parseColor("#10B981")
+        val ACCENT_AMBER = Color.parseColor("#F59E0B")
+        val ACCENT_RED = Color.parseColor("#EF4444")
+        val ACCENT_WARM_GOLD = Color.parseColor("#E5A93C")
     }
 }

@@ -4,10 +4,10 @@
         <item name="android:fontFamily">sans</item>
         <item name="android:windowLightStatusBar">false</item>
         <item name="android:windowLightNavigationBar">false</item>
-        <item name="android:statusBarColor">#070B12</item>
-        <item name="android:navigationBarColor">#070B12</item>
+        <item name="android:statusBarColor">#0C0D11</item>
+        <item name="android:navigationBarColor">#0C0D11</item>
         <item name="android:windowActionModeOverlay">true</item>
-        <item name="android:colorAccent">#4C9BFF</item>
+        <item name="android:colorAccent">#F59E0B</item>
         <item name="android:windowNoTitle">true</item>
         <item name="android:alertDialogTheme">@style/Theme.Waynova.Dialog</item>
     </style>

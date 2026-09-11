@@ -3,18 +3,18 @@
     <style name="Theme.NeuroNavX.Navigation" parent="android:style/Theme.Material.NoActionBar">
         <item name="android:fontFamily">sans</item>
         <item name="android:windowLightStatusBar">false</item>
-        <item name="android:statusBarColor">#070B12</item>
-        <item name="android:navigationBarColor">#070B12</item>
+        <item name="android:statusBarColor">#0C0D11</item>
+        <item name="android:navigationBarColor">#0C0D11</item>
         <item name="android:windowActionModeOverlay">true</item>
-        <item name="android:colorAccent">#4C9BFF</item>
+        <item name="android:colorAccent">#F59E0B</item>
         <item name="android:windowNoTitle">true</item>
         <item name="android:alertDialogTheme">@style/Theme.Waynova.Dialog</item>
     </style>
     <style name="Theme.Waynova.Dialog" parent="android:style/Theme.Material.Dialog.Alert">
         <item name="android:windowBackground">@drawable/waynova_dialog</item>
-        <item name="android:colorAccent">#60A5FA</item>
-        <item name="android:textColorPrimary">#EFF5FC</item>
-        <item name="android:textColorSecondary">#97AAC1</item>
-        <item name="android:colorBackground">#101C2B</item>
+        <item name="android:colorAccent">#F59E0B</item>
+        <item name="android:textColorPrimary">#F7F5F0</item>
+        <item name="android:textColorSecondary">#9EA4B1</item>
+        <item name="android:colorBackground">#14161E</item>
     </style>
 </resources>

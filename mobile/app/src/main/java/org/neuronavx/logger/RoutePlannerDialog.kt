@@ -19,31 +19,98 @@ import kotlin.concurrent.thread
 object RoutePlannerDialog {
     fun show(activity: Activity, startPoint: RoutePoint?, onRoute: (RoutePlan) -> Unit) {
         fun dp(value: Int) = (value * activity.resources.displayMetrics.density).toInt()
-        val form = LinearLayout(activity).apply {
-            orientation = LinearLayout.VERTICAL; setPadding(dp(20), dp(8), dp(20), dp(8))
+
+        val bgSurface = android.graphics.Color.parseColor("#14161E")
+        val inputSurface = android.graphics.Color.parseColor("#1B1F2A")
+        val borderSubtle = android.graphics.Color.parseColor("#262C3B")
+        val borderProminent = android.graphics.Color.parseColor("#3A4459")
+        val textPrimary = android.graphics.Color.parseColor("#F7F5F0")
+        val textSecondary = android.graphics.Color.parseColor("#9EA4B1")
+        val textMuted = android.graphics.Color.parseColor("#697386")
+        val accentAmber = android.graphics.Color.parseColor("#F59E0B")
+        val accentSky = android.graphics.Color.parseColor("#38BDF8")
+
+        fun inputPill() = android.graphics.drawable.GradientDrawable().apply {
+            setColor(inputSurface)
+            cornerRadius = dp(12).toFloat()
+            setStroke(dp(1), borderProminent)
         }
+
+        val form = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(22), dp(16), dp(22), dp(16))
+            setBackgroundColor(bgSurface)
+        }
+
+        form.addView(TextView(activity).apply {
+            text = "ORIGIN / START"
+            textSize = 9f
+            setTextColor(accentAmber)
+            typeface = android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.BOLD)
+            letterSpacing = 0.12f
+        })
+
         val start = EditText(activity).apply {
-            hint = "Start: place + city, or latitude,longitude"
+            hint = "Current place, landmark, or lat,lon"
+            setHintTextColor(textMuted)
+            setTextColor(textPrimary)
+            textSize = 13.5f
             setSingleLine()
+            setPadding(dp(14), dp(12), dp(14), dp(12))
+            background = inputPill()
             startPoint?.let { setText(String.format(Locale.US, "%.6f,%.6f", it.lat, it.lon)) }
             contentDescription = "Starting place or coordinates"
         }
-        val end = EditText(activity).apply {
-            hint = "Destination: place + city, or latitude,longitude"
-            setSingleLine(); contentDescription = "Destination place or coordinates"
-        }
-        val status = TextView(activity).apply {
-            text = "Search needs internet. Place names go to Android's geocoding provider. Route coordinates go to the OSRM demo service and may be logged there. No drive logs are uploaded.\n\nDriving route preview; no traffic or automatic rerouting. Check road signs. Set up only while parked."
-            textSize = 12f; setPadding(0, dp(12), 0, dp(12))
-        }
-        form.addView(start); form.addView(end); form.addView(status)
-        form.addView(TextView(activity).apply {
-            text = Html.fromHtml("Routes: <a href='https://project-osrm.org/'>OSRM</a> · © <a href='https://www.openstreetmap.org/copyright'>OpenStreetMap</a> (ODbL) · <a href='https://www.openstreetmap.org/fixthemap'>Fix the map</a>", Html.FROM_HTML_MODE_LEGACY)
-            movementMethod = LinkMovementMethod.getInstance(); textSize = 11f
+        form.addView(start, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+            topMargin = dp(6)
+            bottomMargin = dp(14)
         })
-        val dialog = AlertDialog.Builder(activity).setTitle("Plan a driving route")
+
+        form.addView(TextView(activity).apply {
+            text = "DESTINATION"
+            textSize = 9f
+            setTextColor(accentSky)
+            typeface = android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.BOLD)
+            letterSpacing = 0.12f
+        })
+
+        val end = EditText(activity).apply {
+            hint = "Destination place, city, or lat,lon"
+            setHintTextColor(textMuted)
+            setTextColor(textPrimary)
+            textSize = 13.5f
+            setSingleLine()
+            setPadding(dp(14), dp(12), dp(14), dp(12))
+            background = inputPill()
+            contentDescription = "Destination place or coordinates"
+        }
+        form.addView(end, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+            topMargin = dp(6)
+            bottomMargin = dp(12)
+        })
+
+        val status = TextView(activity).apply {
+            text = "Online route calculation via OpenStreetMap (OSRM). Route coordinates are fetched securely; sensor logs remain privately stored on your device.\n\nOffline route geometry and maneuver steps will be cached for GPS-denied navigation."
+            textSize = 11.5f
+            setTextColor(textSecondary)
+            setLineSpacing(0f, 1.15f)
+            setPadding(0, dp(6), 0, dp(10))
+        }
+        form.addView(status)
+
+        form.addView(TextView(activity).apply {
+            text = Html.fromHtml("Routes: <a href='https://project-osrm.org/' style='color:#F59E0B;'>OSRM</a> · © <a href='https://www.openstreetmap.org/copyright' style='color:#F59E0B;'>OpenStreetMap</a> (ODbL)", Html.FROM_HTML_MODE_LEGACY)
+            movementMethod = LinkMovementMethod.getInstance()
+            textSize = 10.5f
+            setTextColor(textMuted)
+        })
+
+        val dialog = AlertDialog.Builder(activity)
+            .setTitle("Plan Tactical Driving Route")
             .setView(ScrollView(activity).apply { addView(form) })
-            .setNegativeButton("Cancel", null).setPositiveButton("Search places", null).create()
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Calculate Route", null)
+            .create()
 
         fun fail(message: String) {
             if (dialog.isShowing && !activity.isDestroyed) {
@@ -51,9 +118,10 @@ object RoutePlannerDialog {
                 dialog.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = true
             }
         }
+
         fun resolve(query: String, then: (RoutePoint) -> Unit) {
             RoutePoint.coordinateInput(query)?.let { then(it); return }
-            if (!Geocoder.isPresent()) { fail("Place search is unavailable on this phone. Enter latitude,longitude instead."); return }
+            if (!Geocoder.isPresent()) { fail("Place search is unavailable on this device. Enter latitude,longitude coordinates instead."); return }
             thread(name = "waynova-place-search") {
                 val result = runCatching {
                     @Suppress("DEPRECATION")
@@ -63,37 +131,42 @@ object RoutePlannerDialog {
                 activity.runOnUiThread {
                     if (!dialog.isShowing || activity.isDestroyed) return@runOnUiThread
                     result.onSuccess { addresses ->
-                        if (addresses.isEmpty()) { fail("No results for '$query'. Add the city or use coordinates."); return@onSuccess }
-                        AlertDialog.Builder(activity).setTitle("Choose: $query")
+                        if (addresses.isEmpty()) { fail("No matches for '$query'. Add city or enter coordinates."); return@onSuccess }
+                        AlertDialog.Builder(activity)
+                            .setTitle("Select Location: $query")
                             .setItems(addresses.map { it.getAddressLine(0) ?: "${it.latitude}, ${it.longitude}" }.toTypedArray()) { _, index ->
                                 then(RoutePoint(addresses[index].latitude, addresses[index].longitude))
-                            }.setNegativeButton("Cancel") { _, _ -> fail("Search cancelled. You can edit the places.") }
-                            .setOnCancelListener { fail("Search cancelled. You can edit the places.") }.show()
-                    }.onFailure { fail("Place search failed. Check internet or enter coordinates.") }
+                            }
+                            .setNegativeButton("Cancel") { _, _ -> fail("Search cancelled.") }
+                            .setOnCancelListener { fail("Search cancelled.") }
+                            .show()
+                    }.onFailure { fail("Place search failed. Check network or enter coordinates.") }
                 }
             }
         }
+
         dialog.setOnShowListener {
             dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
                 val from = start.text.toString().trim()
                 val to = end.text.toString().trim()
-                if (from.length < 3 || to.length < 3) { fail("Enter both the starting place and destination."); return@setOnClickListener }
+                if (from.length < 3 || to.length < 3) { fail("Enter both starting point and destination."); return@setOnClickListener }
                 dialog.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled = false
-                status.text = "Finding places… Confirm the matching address before routing."
+                status.text = "Resolving locations… Please wait."
                 resolve(from) { origin -> resolve(to) { destination ->
                     if (!dialog.isShowing) return@resolve
-                    AlertDialog.Builder(activity).setTitle("Get this route online?")
-                        .setMessage("OSRM will receive the selected start and destination coordinates. Your saved drive logs stay on the phone.")
+                    AlertDialog.Builder(activity)
+                        .setTitle("Download Driving Route?")
+                        .setMessage("Coordinates will be sent to the OSRM routing service. Route geometry will be cached locally on-device.")
                         .setNegativeButton("Cancel") { _, _ -> fail("Route request cancelled.") }
                         .setOnCancelListener { fail("Route request cancelled.") }
-                        .setPositiveButton("Get driving route") { _, _ ->
-                            status.text = "Calculating driving route…"
+                        .setPositiveButton("Proceed") { _, _ ->
+                            status.text = "Calculating driving maneuvers…"
                             thread(name = "waynova-route-request") {
                                 val result = runCatching { RouteClient.fetch(origin, destination, to) }
                                 activity.runOnUiThread {
                                     if (!dialog.isShowing || activity.isDestroyed) return@runOnUiThread
                                     result.onSuccess { onRoute(it); dialog.dismiss() }
-                                        .onFailure { fail(it.message ?: "Routing failed. Check internet and try again.") }
+                                        .onFailure { fail(it.message ?: "Routing service failed. Check network connection.") }
                                 }
                             }
                         }.show()
