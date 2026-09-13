@@ -205,13 +205,11 @@ class MapLibreOfflineRenderer(
 
     private fun draw(snapshot: NavigationMapSnapshot) {
         val style = style ?: return
-        val marker = offlineMapMarkerOrNull(snapshot) ?: run {
-            updateCoverage(false)
-            return
-        }
+        val marker = offlineMapMarkerOrNull(snapshot) ?: return
         val covered = marker.latitude in SOUTH..NORTH && marker.longitude in WEST..EAST
         updateCoverage(covered)
-        if (!covered) return
+        // Coverage describes the street tiles, not whether the estimator may render.
+        // Keep tracking in MapLibre outside the archive and report missing coverage.
 
         rawSource?.setGeoJson(lineFeature(projectPath(
             snapshot.originLat, snapshot.originLon,
@@ -444,8 +442,8 @@ class MapLibreOfflineRenderer(
         const val MARKER_LAYER = "nx-marker-layer"
 
         const val EMPTY_FEATURE_COLLECTION = "{\"type\":\"FeatureCollection\",\"features\":[]}"
-        val AIDED_COLOR = Color.parseColor("#4C9BFF")
-        val DENIED_COLOR = Color.parseColor("#FF9F4A")
+        val AIDED_COLOR = Color.parseColor("#2DD4BF")
+        val DENIED_COLOR = Color.parseColor("#FF4D5E")
     }
 }
 

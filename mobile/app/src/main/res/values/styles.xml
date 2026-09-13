@@ -1,20 +1,26 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!--
+      Waynova liquid-glass theme. The system bars are transparent so the aurora backdrop
+      and the floating pill navigation can run edge to edge underneath them; every screen
+      applies its own window insets.
+    -->
     <style name="Theme.NeuroNavX.Navigation" parent="android:style/Theme.Material.NoActionBar">
-        <item name="android:fontFamily">sans</item>
+        <item name="android:fontFamily">sans-serif</item>
         <item name="android:windowLightStatusBar">false</item>
-        <item name="android:statusBarColor">#0C0D11</item>
-        <item name="android:navigationBarColor">#0C0D11</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowBackground">#04060A</item>
         <item name="android:windowActionModeOverlay">true</item>
-        <item name="android:colorAccent">#F59E0B</item>
+        <item name="android:colorAccent">#34D399</item>
         <item name="android:windowNoTitle">true</item>
         <item name="android:alertDialogTheme">@style/Theme.Waynova.Dialog</item>
     </style>
     <style name="Theme.Waynova.Dialog" parent="android:style/Theme.Material.Dialog.Alert">
         <item name="android:windowBackground">@drawable/waynova_dialog</item>
-        <item name="android:colorAccent">#F59E0B</item>
-        <item name="android:textColorPrimary">#F7F5F0</item>
-        <item name="android:textColorSecondary">#9EA4B1</item>
-        <item name="android:colorBackground">#14161E</item>
+        <item name="android:colorAccent">#34D399</item>
+        <item name="android:textColorPrimary">#F2F6F5</item>
+        <item name="android:textColorSecondary">#A7B4BC</item>
+        <item name="android:colorBackground">#0B1017</item>
     </style>
 </resources>

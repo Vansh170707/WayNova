@@ -47,10 +47,17 @@ import org.neuronavx.logger.nav.SensorLoggerRate
 import org.neuronavx.logger.nav.SpeedModel
 import org.neuronavx.logger.nav.RoutePlan
 import org.neuronavx.logger.nav.RoutePoint
+import org.neuronavx.logger.nav.RouteGuidance
+import org.neuronavx.logger.nav.TurnCuePlanner
 import org.neuronavx.logger.nav.EnuMapProjection
 import org.neuronavx.logger.nav.AvionicsVoiceCoPilot
 import org.neuronavx.logger.nav.SentinelReport
 import org.neuronavx.logger.nav.SentinelState
+import org.neuronavx.logger.ui.Glass
+import org.neuronavx.logger.ui.accentChip
+import org.neuronavx.logger.ui.accentFill
+import org.neuronavx.logger.ui.glass
+import org.neuronavx.logger.ui.glow
 import org.json.JSONObject
 import java.io.File
 import kotlin.concurrent.thread
@@ -86,11 +93,20 @@ class NavigationActivity : ComponentActivity() {
     private lateinit var routeButton: TextView
     private lateinit var voiceButton: TextView
     private lateinit var sentinelChip: TextView
+    private lateinit var bottomPanel: LinearLayout
+    private lateinit var outageBanner: LinearLayout
     private lateinit var voiceCoPilot: AvionicsVoiceCoPilot
     private var prevNavMode: NavMode = NavMode.AIDED
     private var prevSentinelState: SentinelState = SentinelState.NOMINAL
     private var announcedMissionStart = false
     private var plannedRoute: RoutePlan? = null
+    private var routeGuidance: RouteGuidance? = null
+    private val spokenRouteCues = HashSet<String>()
+    private var lastRouteUpdateMs = 0L
+    private var lastRouteResult: RouteGuidance.Result? = null
+    private var lastRouteWasAssisted = false
+    @Volatile private var savedReplayGeneration = 0
+    private var viewingSavedRide = false
     private var mapBottomInsetPx = 0
 
     private var navigator: Navigator? = null
@@ -128,6 +144,10 @@ class NavigationActivity : ComponentActivity() {
         configureWindow()
         setContentView(buildNavigationShell())
         googleMapRenderer?.onCreate(savedInstanceState)
+        if (!Prefs.voiceEnabled(this)) {
+            voiceCoPilot.toggleMute()
+            voiceButton.text = "🔇"
+        }
         showIdleState()
         prepareBundledOfflineMap()
         runCatching {
@@ -135,7 +155,9 @@ class NavigationActivity : ComponentActivity() {
             if (cache.exists() && cache.length() <= 2_000_000)
                 RoutePlan.fromCache(JSONObject(cache.readText())) else null
         }.getOrNull()?.let { applyRoute(it, save = false) }
-        if (savedInstanceState == null && intent.getBooleanExtra("start_demo", false)) onReplay()
+        if (savedInstanceState == null && intent.getLongExtra("saved_ride_id", 0) > 0)
+            startSavedRide(intent.getLongExtra("saved_ride_id", 0))
+        else if (savedInstanceState == null && intent.getBooleanExtra("start_demo", false)) onReplay()
         else if (savedInstanceState == null && intent.getBooleanExtra("plan_route", false)) openRouteSearch()
     }
 
@@ -176,10 +198,11 @@ class NavigationActivity : ComponentActivity() {
         }
 
         map = NavigationView(this).apply {
+            // Retained as a snapshot sink only; never present the canvas as navigation.
+            visibility = View.GONE
             setPadding(dp(16), dp(76), dp(16), dp(328))
             contentDescription = "Waynova estimated track and uncertainty map"
         }
-        root.addView(map, FrameLayout.LayoutParams(MATCH, MATCH))
 
         // Unified Top Floating Glass Island
         root.addView(buildTopBar(), FrameLayout.LayoutParams(MATCH, dp(52)).apply {
@@ -215,6 +238,14 @@ class NavigationActivity : ComponentActivity() {
         root.addView(mapAttribution, FrameLayout.LayoutParams(WRAP, dp(24)).apply {
             gravity = Gravity.START or Gravity.BOTTOM
             setMargins(dp(16), 0, 0, dp(342))
+        })
+
+        outageBanner = buildOutageBanner()
+        // Anchored on the left: the map's own compass and the recenter control both live
+        // on the right edge, and the warning must never sit on top of a control.
+        root.addView(outageBanner, FrameLayout.LayoutParams(WRAP, WRAP).apply {
+            gravity = Gravity.START or Gravity.TOP
+            setMargins(dp(16), dp(76), 0, 0)
         })
 
         val bottomPanel = buildBottomPanel()
@@ -341,6 +372,7 @@ class NavigationActivity : ComponentActivity() {
             .setNeutralButton("New Route") { _, _ -> openRouteSearch() }
             .setNegativeButton("Clear") { _, _ ->
                 plannedRoute = null
+                live?.setRoute(null)
                 File(filesDir, "planned_route.json").delete()
                 googleMapRenderer?.setPlannedRoute(emptyList())
                 mapLibreRenderer?.setPlannedRoute(emptyList())
@@ -348,6 +380,35 @@ class NavigationActivity : ComponentActivity() {
                 routeButton.text = "⌕  Destination / Route"
                 refreshMapAttribution()
             }.show()
+    }
+
+    private fun showNavigationBackOptions() {
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Navigation")
+            .setItems(arrayOf("Choose another route", "Back to dashboard")) { _, which ->
+                if (which == 1) {
+                    finish()
+                } else if (live != null && (navigator?.state?.speed ?: 0.0) > 0.5) {
+                    Toast.makeText(this, "Park before changing your route.", Toast.LENGTH_LONG).show()
+                } else if (live != null) {
+                    android.app.AlertDialog.Builder(this)
+                        .setTitle("Save this drive and choose a route?")
+                        .setMessage("The current recording will be saved. Your existing route stays until you select a replacement.")
+                        .setNegativeButton("Cancel", null)
+                        .setPositiveButton("Save and choose") { _, _ ->
+                            live?.interruptTest()
+                            stopLive()?.let(::showSavedSession)
+                            setActions(replayRunning = false, liveRunning = false)
+                            openRouteSearch()
+                        }.show()
+                } else {
+                    stopReplay()
+                    setActions(replayRunning = false, liveRunning = false)
+                    openRouteSearch()
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
     }
 
     private fun openRouteSearch() {
@@ -362,7 +423,14 @@ class NavigationActivity : ComponentActivity() {
     }
 
     private fun applyRoute(route: RoutePlan, save: Boolean = true) {
+        live?.setRoute(route)
+        viewingSavedRide = false
         plannedRoute = route
+        routeGuidance = RouteGuidance(route)
+        spokenRouteCues.clear()
+        lastRouteResult = null
+        lastRouteWasAssisted = false
+        lastRouteUpdateMs = 0L
         if (live == null && replayThread == null) {
             latestMapSnapshot = null
             googleMapRenderer?.clear(); mapLibreRenderer?.clear(); map.clear()
@@ -382,12 +450,12 @@ class NavigationActivity : ComponentActivity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(6), dp(5), dp(8), dp(5))
-            background = pill(SURFACE_STRONG, dp(20), BORDER_SUBTLE)
-            elevation = dp(8).toFloat()
+            background = glass(20, SURFACE_STRONG, BORDER_PROMINENT)
+            glow(Glass.TEAL, 10f)
 
             val back = actionText("‹", 26f, dp(38)).apply {
-                contentDescription = "Back to dashboard"
-                setOnClickListener { finish() }
+                contentDescription = "Back: choose another route or dashboard"
+                setOnClickListener { showNavigationBackOptions() }
             }
             addView(back, LinearLayout.LayoutParams(dp(38), dp(38)))
 
@@ -400,7 +468,7 @@ class NavigationActivity : ComponentActivity() {
                 ellipsize = android.text.TextUtils.TruncateAt.END
                 gravity = Gravity.CENTER_VERTICAL
                 setPadding(dp(10), 0, dp(10), 0)
-                background = pill(SURFACE_SOFT, dp(14), BORDER_SUBTLE)
+                background = glass(14, Glass.PANEL_FILL_INNER)
                 isClickable = true
                 isFocusable = true
                 contentDescription = "Find destination or view saved driving directions"
@@ -415,7 +483,7 @@ class NavigationActivity : ComponentActivity() {
                 letterSpacing = 0.08f
                 gravity = Gravity.CENTER
                 setPadding(dp(8), 0, dp(8), 0)
-                background = pill(SURFACE_SOFT, dp(14), BORDER_SUBTLE)
+                background = glass(14, Glass.PANEL_FILL_INNER)
             }
             addView(modeBadge, LinearLayout.LayoutParams(WRAP, dp(38)))
 
@@ -426,7 +494,7 @@ class NavigationActivity : ComponentActivity() {
                 letterSpacing = 0.06f
                 gravity = Gravity.CENTER
                 setPadding(dp(8), 0, dp(8), 0)
-                background = pill(SURFACE_SOFT, dp(14), BORDER_SUBTLE)
+                background = accentChip(ACCENT_GREEN, 14)
                 isClickable = true
                 isFocusable = true
                 contentDescription = "Switch map renderer; long press to import an offline map"
@@ -445,6 +513,7 @@ class NavigationActivity : ComponentActivity() {
                 setOnClickListener {
                     performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
                     val muted = voiceCoPilot.toggleMute()
+                    Prefs.setVoiceEnabled(this@NavigationActivity, !muted)
                     text = if (muted) "🔇" else "🔊"
                     Toast.makeText(
                         this@NavigationActivity,
@@ -459,15 +528,42 @@ class NavigationActivity : ComponentActivity() {
         }
     }
 
+    /**
+     * The satellite-loss warning that floats over the map.
+     *
+     * It is deliberately separate from the status panel: during an outage the driver
+     * needs one unmissable signal that the blue dot is now an estimate, without the map
+     * itself turning into an alarm.
+     */
+    private fun buildOutageBanner(): LinearLayout = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        gravity = Gravity.CENTER_HORIZONTAL
+        setPadding(dp(12), dp(10), dp(12), dp(10))
+        background = glass(18, Glass.alpha(ACCENT_RED, 0.18f), Glass.alpha(ACCENT_RED, 0.55f))
+        glow(ACCENT_RED, 14f)
+        visibility = View.GONE
+        contentDescription = "Satellite signal unavailable. Position is being estimated."
+
+        addView(label("⊘", 18f, ACCENT_RED, Typeface.BOLD))
+        addView(label("GNSS", 10f, ACCENT_RED, Typeface.BOLD).apply {
+            letterSpacing = 0.12f
+            setPadding(0, dp(5), 0, 0)
+        })
+        addView(label("UNAVAILABLE", 10f, ACCENT_RED, Typeface.BOLD).apply {
+            letterSpacing = 0.12f
+        })
+    }
+
     private fun buildBottomPanel(): View {
         return LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(18), dp(10), dp(18), dp(16))
-            background = pill(SURFACE_STRONG, dp(26), BORDER_SUBTLE)
-            elevation = dp(16).toFloat()
+            background = glass(26, SURFACE_STRONG, BORDER_PROMINENT)
+            glow(Glass.EMERALD, 18f)
+            bottomPanel = this
 
             addView(View(this@NavigationActivity).apply {
-                background = pill(Color.parseColor("#3B4459"), dp(2))
+                background = pill(BORDER_PROMINENT, dp(2))
             }, LinearLayout.LayoutParams(dp(36), dp(4)).apply {
                 gravity = Gravity.CENTER_HORIZONTAL
                 bottomMargin = dp(10)
@@ -486,12 +582,12 @@ class NavigationActivity : ComponentActivity() {
                 letterSpacing = 0.06f
                 gravity = Gravity.CENTER
                 setPadding(dp(7), dp(3), dp(7), dp(3))
-                background = pill(SURFACE_SOFT, dp(10), withAlpha(ACCENT_GREEN, 120))
+                background = accentChip(ACCENT_GREEN, 10)
             }
             statusHeader.addView(sentinelChip)
             addView(statusHeader)
 
-            headline = label("Position Locked · Estimator Ready", 19f, TEXT_PRIMARY, Typeface.BOLD)
+            headline = label("Ready to check your position", 19f, TEXT_PRIMARY, Typeface.BOLD)
             addView(headline, LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = dp(2) })
 
             guidance = label(
@@ -505,8 +601,8 @@ class NavigationActivity : ComponentActivity() {
             ).apply {
                 max = 100
                 progress = 0
-                progressTintList = ColorStateList.valueOf(ACCENT_AMBER)
-                progressBackgroundTintList = ColorStateList.valueOf(Color.parseColor("#262C3B"))
+                progressTintList = ColorStateList.valueOf(ACCENT_GREEN)
+                progressBackgroundTintList = ColorStateList.valueOf(BORDER_SUBTLE)
                 visibility = View.GONE
             }
             addView(calibrationProgress, LinearLayout.LayoutParams(MATCH, dp(4)).apply {
@@ -571,7 +667,7 @@ class NavigationActivity : ComponentActivity() {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(12), dp(8), dp(10), dp(7))
-            background = pill(SURFACE_SOFT, dp(16), BORDER_SUBTLE)
+            background = glass(16, Glass.PANEL_FILL_INNER)
             addView(label(title, 8.5f, TEXT_MUTED, Typeface.BOLD).apply { letterSpacing = 0.12f })
             val line = LinearLayout(this@NavigationActivity).apply {
                 orientation = LinearLayout.HORIZONTAL
@@ -579,7 +675,7 @@ class NavigationActivity : ComponentActivity() {
                 value = label("—", 22f, TEXT_PRIMARY, Typeface.BOLD).apply {
                     typeface = Typeface.MONOSPACE
                 }
-                unit = label("", 8.5f, ACCENT_AMBER, Typeface.BOLD).apply {
+                unit = label("", 8.5f, ACCENT_GREEN, Typeface.BOLD).apply {
                     setPadding(dp(4), 0, 0, dp(3))
                     letterSpacing = 0.06f
                 }
@@ -609,19 +705,27 @@ class NavigationActivity : ComponentActivity() {
             gravity = Gravity.CENTER
             isClickable = true
             isFocusable = true
-            background = ripple(SURFACE_SOFT, dp(15), BORDER_SUBTLE)
+            background = RippleDrawable(
+                ColorStateList.valueOf(Glass.alpha(Color.WHITE, 0.16f)),
+                glass(15, Glass.PANEL_FILL_INNER),
+                null,
+            )
             layoutParams = LinearLayout.LayoutParams(width, dp(44))
         }
 
     private fun actionButton(text: String, primary: Boolean): TextView =
-        label(text, 13.5f, if (primary) Color.parseColor("#0C0D11") else TEXT_PRIMARY, Typeface.BOLD).apply {
+        label(text, 13.5f, if (primary) Glass.TEXT_ON_ACCENT else TEXT_PRIMARY, Typeface.BOLD).apply {
             this.text = text
             gravity = Gravity.CENTER
             isClickable = true
             isFocusable = true
             letterSpacing = 0.04f
-            background = if (primary) ripple(ACCENT_AMBER, dp(16), Color.parseColor("#E5A93C"))
-                else ripple(SURFACE_SOFT, dp(16), BORDER_PROMINENT)
+            background = RippleDrawable(
+                ColorStateList.valueOf(Glass.alpha(Color.WHITE, 0.2f)),
+                if (primary) accentFill(ACCENT_GREEN, 16) else glass(16, SURFACE_SOFT, BORDER_PROMINENT),
+                null,
+            )
+            if (primary) glow(ACCENT_GREEN, 10f)
         }
 
     private fun pill(color: Int, radius: Int, strokeColor: Int? = null): GradientDrawable =
@@ -668,13 +772,15 @@ class NavigationActivity : ComponentActivity() {
     }
 
     private fun showLocalFallback() {
+        if (googleMapReady) { showGoogleBasemap(); return }
+        if (mapLibreReady) { showMapLibreBasemap(); return }
         googleMapActive = false
         mapLibreActive = false
         googleMapRenderer?.view?.visibility = View.INVISIBLE
         mapLibreRenderer?.view?.visibility = View.INVISIBLE
-        map.visibility = View.VISIBLE
+        map.visibility = View.GONE
         refreshMapAttribution()
-        mapSourceBadge.text = "CANVAS ONLY"
+        mapSourceBadge.text = "MAP UNAVAILABLE · TAP"
         mapSourceBadge.setTextColor(TEXT_MUTED)
         mapSourceBadge.background = pill(SURFACE_SOFT, dp(14), BORDER_SUBTLE)
         recenterButton.visibility = View.GONE
@@ -682,12 +788,6 @@ class NavigationActivity : ComponentActivity() {
 
     private fun showMapLibreBasemap() {
         if (!mapLibreReady) return
-        val snapshot = latestMapSnapshot
-        if (snapshot != null && mapLibreRenderer?.covers(snapshot) == false) {
-            showLocalFallback()
-            mapSourceBadge.text = "OUTSIDE MAP"
-            return
-        }
         googleMapActive = false
         mapLibreActive = true
         googleMapRenderer?.view?.visibility = View.INVISIBLE
@@ -700,10 +800,20 @@ class NavigationActivity : ComponentActivity() {
             SURFACE_SOFT, dp(14), withAlpha(ACCENT_GREEN, 150)
         )
         recenterButton.visibility = View.VISIBLE
+        updateOfflineCoverageBadge()
+    }
+
+    private fun updateOfflineCoverageBadge() {
+        if (!mapLibreActive) return
+        val snapshot = latestMapSnapshot
+        val outside = snapshot != null && org.neuronavx.logger.nav.offlineMapMarkerOrNull(snapshot) != null &&
+            mapLibreRenderer?.covers(snapshot) == false
+        mapSourceBadge.text = if (outside) "NO OFFLINE COVERAGE" else "OFFLINE GN"
+        mapSourceBadge.setTextColor(if (outside) ACCENT_AMBER else ACCENT_GREEN)
     }
 
     private fun refreshMapAttribution() {
-        val hasRoute = plannedRoute != null && replayThread == null
+        val hasRoute = plannedRoute != null && replayThread == null && !viewingSavedRide
         mapAttribution.text = if (mapLibreActive) "MapLibre · © OpenStreetMap · Protomaps"
             else "Routes: OSRM · © OpenStreetMap"
         mapAttribution.visibility = if (mapLibreActive || hasRoute) View.VISIBLE else View.GONE
@@ -713,8 +823,10 @@ class NavigationActivity : ComponentActivity() {
         mapSourceBadge.performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
         when {
             googleMapActive && mapLibreReady -> showMapLibreBasemap()
-            googleMapActive -> showLocalFallback()
-            mapLibreActive -> showLocalFallback()
+            mapLibreActive && googleMapReady -> showGoogleBasemap()
+            googleMapActive || mapLibreActive -> Toast.makeText(
+                this, "This is the available map. Long-press to import an offline map.", Toast.LENGTH_LONG
+            ).show()
             googleMapReady -> showGoogleBasemap()
             mapLibreReady -> showMapLibreBasemap()
             preparingOfflineMap -> Toast.makeText(
@@ -812,17 +924,14 @@ class NavigationActivity : ComponentActivity() {
                     if (selectWhenReady || !googleMapReady) showMapLibreBasemap()
                 }
             },
-            onCoverageChanged = { covered ->
+            onCoverageChanged = { _ ->
                 ui.post {
-                    if (!covered && mapLibreActive) {
-                        showLocalFallback()
-                        mapSourceBadge.text = "OUTSIDE OFFLINE AREA"
-                    }
+                    updateOfflineCoverageBadge()
                 }
             },
         )
         mapLibreRenderer = renderer
-        if (replayThread == null) plannedRoute?.let { renderer.setPlannedRoute(it.points) }
+        if (replayThread == null && !viewingSavedRide) plannedRoute?.let { renderer.setPlannedRoute(it.points) }
         renderer.view.visibility = View.INVISIBLE
         root.addView(renderer.view, 0, FrameLayout.LayoutParams(MATCH, MATCH))
         renderer.onCreate(null)
@@ -926,10 +1035,78 @@ class NavigationActivity : ComponentActivity() {
     }
 
     private fun stopReplay() {
+        savedReplayGeneration++
+        voiceCoPilot.stopSpeaking()
         stopRequested = true
         replayThread?.join(2000)
         replayThread = null
         setActions(replayRunning = false, liveRunning = false)
+    }
+
+    private fun startSavedRide(id: Long) {
+        stopReplay()
+        viewingSavedRide = true
+        val generation = savedReplayGeneration
+        stopRequested = false
+        navigator = null
+        mapLibreRenderer?.clear()
+        googleMapRenderer?.clear()
+        mapLibreRenderer?.setPlannedRoute(emptyList())
+        googleMapRenderer?.setPlannedRoute(emptyList())
+        setActions(replayRunning = true, liveRunning = false)
+        replayButton.text = "Stop ride replay"
+        routeButton.text = "SAVED RIDE · NOT LIVE"
+        showStartingState("SAVED REPLAY", "Loading the original recorded estimates…")
+        replayThread = thread(name = "waynova-saved-ride") {
+            try {
+                val ride = org.neuronavx.logger.nav.SavedRide.load(checkNotNull(getExternalFilesDir(null)), id)
+                val east = ArrayList<Double>(); val north = ArrayList<Double>(); val dark = ArrayList<Boolean>()
+                var previous = ride.frames.first().timeMs
+                var lastShown = Double.NEGATIVE_INFINITY
+                for ((index, frame) in ride.frames.withIndex()) {
+                    if (stopRequested || generation != savedReplayGeneration) break
+                    val gap = frame.timeMs - previous > 2000
+                    if (gap) { east.clear(); north.clear(); dark.clear() }
+                    if (index > 0) Thread.sleep(((frame.timeMs - previous) / 4).toLong().coerceIn(0,250))
+                    previous = frame.timeMs
+                    east += frame.east; north += frame.north; dark += (frame.mode != "AIDED")
+                    if (east.size > 2500) { east.removeAt(0); north.removeAt(0); dark.removeAt(0) }
+                    if (frame.timeMs-lastShown < 200 && index != ride.frames.lastIndex) continue
+                    lastShown = frame.timeMs
+                    val e = east.toDoubleArray(); val n = north.toDoubleArray()
+                    val snapshot = NavigationMapSnapshot(ride.origin.lat,ride.origin.lon,e,n,e,n,dark.toBooleanArray(),
+                        frame.east,frame.north,frame.heading,frame.sigma,frame.mode != "AIDED")
+                    ui.post {
+                        if (isDestroyed || generation != savedReplayGeneration || stopRequested) return@post
+                        latestMapSnapshot = snapshot
+                        mapLibreRenderer?.submit(snapshot); googleMapRenderer?.submit(snapshot)
+                        setMode("REPLAY · ${frame.mode}", if (frame.mode == "AIDED") ACCENT_GREEN else ACCENT_AMBER)
+                        eyebrow.text = "SAVED RIDE · 4× · NOT LIVE"
+                        headline.text = "Replaying your recorded estimate"
+                        guidance.text = "Original diagnostics, not a new accuracy test. Long recording gaps are shortened."
+                        contextLine.text = "SESSION $id · %.0f / %.0f S · LAST 2500 POINTS".format(
+                            (frame.timeMs-ride.frames.first().timeMs)/1000,
+                            (ride.frames.last().timeMs-ride.frames.first().timeMs)/1000)
+                        setMetric(speedMetric,"%.0f".format(Prefs.speedInPreferredUnit(this,frame.speed)),Prefs.speedLabel(this))
+                        setMetric(headingMetric,"%.0f".format((Math.toDegrees(frame.heading)+360)%360),"DEG")
+                        setMetric(uncertaintyMetric,"%.1f".format(frame.sigma),"M 1σ")
+                        calibrationProgress.visibility = View.GONE
+                    }
+                }
+                ui.post {
+                    if (!isDestroyed && generation == savedReplayGeneration && !stopRequested)
+                        showPausedState("Recorded ride finished", "This was the saved estimate, not live navigation or a new accuracy result.")
+                }
+            } catch (error: Exception) {
+                ui.post { if (!isDestroyed && generation == savedReplayGeneration && !stopRequested)
+                    showFailure(error.message ?: "Could not replay this ride") }
+            } finally {
+                ui.post { if (!isDestroyed && generation == savedReplayGeneration) {
+                    replayThread = null
+                    setActions(replayRunning = false, liveRunning = false)
+                } }
+            }
+        }
     }
 
     // --------------------------------------------------------------------- live
@@ -969,7 +1146,7 @@ class NavigationActivity : ComponentActivity() {
             map.clear()
             googleMapRenderer?.clear()
             mapLibreRenderer?.clear()
-            live = LiveSource(this, nav) { state -> render(state, force = false) }.also { it.start() }
+            live = LiveSource(this, nav) { state -> render(state, force = false) }.also { it.setRoute(plannedRoute); it.start() }
             setActions(replayRunning = false, liveRunning = true)
             showStartingState("ACQUIRING", "Waiting for GNSS and motion calibration…")
             contextLine.text = "RECORDING RAW + DIAGNOSTICS  •  CHECKING SENSOR STREAM"
@@ -982,6 +1159,7 @@ class NavigationActivity : ComponentActivity() {
     }
 
     private fun stopLive(): LiveSessionSummary? {
+        voiceCoPilot.stopSpeaking()
         val summary = live?.stop()
         live = null
         model?.close()
@@ -1023,19 +1201,21 @@ class NavigationActivity : ComponentActivity() {
         if (!force && now - lastRendered < 50) return
         lastRendered = now
         val nav = navigator ?: return
+        val liveSource = live
+        val assistance = liveSource?.routeAssistance
         val e = nav.trackEast.toDoubleArray()
         val n = nav.trackNorth.toDoubleArray()
         val de = nav.displayEastTrack.toDoubleArray()
         val dn = nav.displayNorthTrack.toDoubleArray()
         val dark = nav.trackDark.toBooleanArray()
         ui.post {
-            if (isDestroyed) return@post
+            if (isDestroyed || navigator !== nav || (liveSource != null && live !== liveSource)) return@post
             if (live != null) plannedRoute?.let { map.setPlannedRoute(it.points, nav.originLat, nav.originLon) }
             map.submit(
                 e, n, de, dn, dark, state.displayEast, state.displayNorth,
                 state.heading, state.sigmaM, state.mode != NavMode.AIDED,
             )
-            val snapshot = NavigationMapSnapshot(
+            val originalSnapshot = NavigationMapSnapshot(
                 originLat = nav.originLat,
                 originLon = nav.originLon,
                 estimateEast = e,
@@ -1049,18 +1229,112 @@ class NavigationActivity : ComponentActivity() {
                 sigmaM = state.sigmaM,
                 inOutage = state.mode != NavMode.AIDED,
             )
+            val assistedPoint = assistance?.point
+            val snapshot = if (assistedPoint != null) originalSnapshot.copy(
+                markerEast = Math.toRadians(assistedPoint.lon-nav.originLon)*6378137.0*kotlin.math.cos(Math.toRadians(nav.originLat)),
+                markerNorth = Math.toRadians(assistedPoint.lat-nav.originLat)*6378137.0,
+                sigmaM = maxOf(state.sigmaM,assistance.uncertaintyM),
+            ) else originalSnapshot
             latestMapSnapshot = snapshot
             googleMapRenderer?.submit(snapshot)
             mapLibreRenderer?.submit(snapshot)
-            if (failure == null) updateShell(state)
+            if (failure == null) {
+                updateShell(state)
+                updateRouteGuidance(state)
+                if (assistance?.status == "ASSISTED") {
+                    setMetric(uncertaintyMetric, "%.1f".format(assistance.uncertaintyM), "M EST.")
+                    if (lastRouteResult?.status == RouteGuidance.Status.READY) {
+                        eyebrow.text = "ROUTE ESTIMATE · GPS UNAVAILABLE"
+                        eyebrow.setTextColor(ACCENT_AMBER)
+                    } else {
+                        headline.text = "Route-assisted · GPS unavailable"
+                        guidance.text = "Position assumes the selected road. Original estimate remains visible; distance error can still grow."
+                    }
+                } else if (assistance != null && state.mode != NavMode.AIDED) {
+                    guidance.text = "Route assist paused: ${assistance.status.lowercase().replace('_',' ')}. Showing original estimate."
+                }
+            }
+        }
+    }
+
+    private fun updateRouteGuidance(s: Navigator.State) {
+        if (live == null || replayThread != null || plannedRoute == null ||
+            s.phase != Navigator.Phase.NAVIGATING) return
+        val withholding = live?.blackoutTestSnapshot()?.phase == FieldBlackoutPhase.WITHHOLDING
+        val aided = s.mode == NavMode.AIDED && !withholding
+        val assistance = live?.routeAssistance
+        val routeAssisted = !aided && assistance?.status == "ASSISTED" && assistance.point != null
+        if (!aided && !routeAssisted) {
+            voiceCoPilot.stopRouteSpeech()
+            lastRouteResult = null
+            lastRouteUpdateMs = 0L
+            lastRouteWasAssisted = false
+            return
+        }
+        val nav = navigator ?: return
+        val position = if (routeAssisted) assistance!!.point!! else runCatching {
+                EnuMapProjection.toLatLng(nav.originLat, nav.originLon, s.east, s.north)
+                    .let { RoutePoint(it.latitude, it.longitude) }
+            }.getOrNull() ?: return
+        val now = android.os.SystemClock.elapsedRealtime()
+        // Geometry matching is a presentation task, not part of the sensor loop.
+        if (now - lastRouteUpdateMs >= 500 || lastRouteResult == null ||
+            lastRouteWasAssisted != routeAssisted || (!routeAssisted && (s.gnssFixAgeS > 2.5 || s.sigmaM > 20))) {
+            lastRouteResult = if (routeAssisted) {
+                routeGuidance?.updateAssisted(position, assistance!!.uncertaintyM, s.heading, s.speed)
+            } else {
+                routeGuidance?.update(position, true, s.sigmaM, s.gnssFixAgeS, s.heading, s.speed)
+            }
+            lastRouteUpdateMs = now
+            lastRouteWasAssisted = routeAssisted
+        }
+        val result = lastRouteResult ?: return
+        when (result.status) {
+            RouteGuidance.Status.READY -> {
+                val distance = if (result.distanceM >= 1000) "%.1f km".format(result.distanceM / 1000)
+                    else "%.0f m".format(result.distanceM / 10 * 10)
+                headline.text = "In $distance · ${result.instruction}"
+                guidance.text = if (routeAssisted) {
+                    "Route-assisted estimate · %.1f km remaining · Follow road signs".format(result.remainingM / 1000)
+                } else {
+                    "%.1f km remaining · Follow road signs".format(result.remainingM / 1000)
+                }
+                val cue = TurnCuePlanner.cue(result, routeAssisted)
+                if (cue != null && s.speed > 1 && !voiceCoPilot.isMuted && cue.key !in spokenRouteCues) {
+                    if (voiceCoPilot.speak(cue.text, flush = true, routeCue = true)) spokenRouteCues += cue.key
+                }
+            }
+            RouteGuidance.Status.NEAR_DESTINATION -> {
+                voiceCoPilot.stopRouteSpeech()
+                headline.text = "Near your destination"
+                guidance.text = "Check the entrance and park safely. Stop navigation to save your drive."
+            }
+            else -> {
+                voiceCoPilot.stopRouteSpeech()
+                headline.text = "Turn guidance paused"
+                guidance.text = when (result.status) {
+                    RouteGuidance.Status.NO_DETAIL -> "This saved route supports preview only. Choose a fresh, shorter route for live guidance."
+                    RouteGuidance.Status.OFF_ROUTE -> "Away from the planned route. Park and choose another route; automatic rerouting is not enabled."
+                    RouteGuidance.Status.WRONG_WAY -> "Travel direction differs from the route. Follow signs; reselect a route when parked."
+                    RouteGuidance.Status.AMBIGUOUS -> "Route position is ambiguous near a crossing. Follow road signs."
+                    else -> "Waiting for a fresh, reliable position. Follow road signs."
+                }
+            }
         }
     }
 
     private fun updateShell(s: Navigator.State) {
         val fieldTest = live?.blackoutTestSnapshot()
         if (fieldTest != null) updateLiveTestAction(fieldTest)
-        val speedKmh = (s.speed.coerceAtLeast(0.0) * 3.6)
-        setMetric(speedMetric, if (speedKmh.isFinite()) "%.0f".format(speedKmh) else "—", "KM/H")
+        outageBanner.visibility = if (s.mode == NavMode.BLACKOUT) View.VISIBLE else View.GONE
+        // Speed stays in SI everywhere inside the estimator; the unit preference is applied
+        // only at the moment of display.
+        val speedDisplayed = Prefs.speedInPreferredUnit(this, s.speed.coerceAtLeast(0.0))
+        setMetric(
+            speedMetric,
+            if (speedDisplayed.isFinite()) "%.0f".format(speedDisplayed) else "—",
+            Prefs.speedLabel(this),
+        )
 
         if (s.phase == Navigator.Phase.CALIBRATING) {
             val progress = (s.calibrationProgress * 100.0).roundToInt().coerceIn(0, 100)
@@ -1205,19 +1479,24 @@ class NavigationActivity : ComponentActivity() {
     private fun setMode(label: String, color: Int) {
         modeBadge.text = "●  $label"
         modeBadge.setTextColor(color)
-        modeBadge.background = pill(SURFACE_SOFT, dp(14), withAlpha(color, 150))
+        modeBadge.background = accentChip(color, 14)
+        // The whole status panel picks up the mode colour, so a glance at the glass edge
+        // is enough to tell aided from denied without reading any text.
+        bottomPanel.background = glass(26, SURFACE_STRONG, Glass.alpha(color, 0.5f))
+        bottomPanel.glow(color, 18f)
     }
 
     private fun showIdleState() {
+        outageBanner.visibility = View.GONE
         setMode("STANDBY", TEXT_SECONDARY)
         eyebrow.text = "READY"
         eyebrow.setTextColor(ACCENT_BLUE)
-        headline.text = "Position Locked · Estimator Ready"
-        guidance.text = "Start a live mission or run the demonstration benchmark."
-        setMetric(speedMetric, "—", "KM/H")
+        headline.text = "Ready to check your position"
+        guidance.text = "Mount the phone while parked. Start navigation to check GPS and calibrate before relying on guidance."
+        setMetric(speedMetric, "—", Prefs.speedLabel(this))
         setMetric(headingMetric, "—", "DEG")
         setMetric(uncertaintyMetric, "—", "M 1σ")
-        contextLine.text = "ESTIMATOR READY  •  PROCESSING STAYS ON DEVICE"
+        contextLine.text = "GPS + CALIBRATION CHECKS START WITH NAVIGATION"
         calibrationProgress.visibility = View.GONE
         sentinelChip.text = "● SENTINEL: STANDBY"
         sentinelChip.setTextColor(TEXT_SECONDARY)
@@ -1244,7 +1523,7 @@ class NavigationActivity : ComponentActivity() {
         detail: String = "ESTIMATOR STOPPED  •  TRACK RETAINED",
     ) {
         setMode("PAUSED", TEXT_SECONDARY)
-        setMetric(speedMetric, "—", "KM/H")
+        setMetric(speedMetric, "—", Prefs.speedLabel(this))
         setMetric(headingMetric, "—", "DEG")
         setMetric(uncertaintyMetric, "—", "M 1σ")
         eyebrow.text = "SESSION PAUSED"
@@ -1266,8 +1545,11 @@ class NavigationActivity : ComponentActivity() {
     }
 
     private fun setActions(replayRunning: Boolean, liveRunning: Boolean) {
-        if (replayRunning || liveRunning) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        if ((replayRunning || liveRunning) && Prefs.keepScreenOn(this)) {
+            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        } else {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
         liveButton.text = if (liveRunning) "Stop navigation" else "Start live navigation"
         liveButton.isEnabled = !replayRunning
         liveButton.alpha = if (liveButton.isEnabled) 1f else 0.42f
@@ -1384,18 +1666,21 @@ class NavigationActivity : ComponentActivity() {
         const val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
         const val WRAP = ViewGroup.LayoutParams.WRAP_CONTENT
 
-        val NAV_BACKGROUND = Color.parseColor("#0C0D11")
-        val SURFACE_STRONG = Color.parseColor("#EE14161E")
-        val SURFACE_SOFT = Color.parseColor("#1B1F2A")
-        val BORDER_SUBTLE = Color.parseColor("#262C3B")
-        val BORDER_PROMINENT = Color.parseColor("#3A4459")
-        val TEXT_PRIMARY = Color.parseColor("#F7F5F0")
-        val TEXT_SECONDARY = Color.parseColor("#9EA4B1")
-        val TEXT_MUTED = Color.parseColor("#697386")
-        val ACCENT_BLUE = Color.parseColor("#38BDF8")
-        val ACCENT_GREEN = Color.parseColor("#10B981")
-        val ACCENT_AMBER = Color.parseColor("#F59E0B")
-        val ACCENT_RED = Color.parseColor("#EF4444")
-        val ACCENT_WARM_GOLD = Color.parseColor("#E5A93C")
+        // Liquid-glass palette, shared with org.neuronavx.logger.ui.Glass. Panels that
+        // float over the live map keep a high-opacity fill so route colours underneath
+        // can never make the telemetry unreadable.
+        val NAV_BACKGROUND = Glass.BG_DEEP
+        val SURFACE_STRONG = Glass.PANEL_FILL_OVER_MAP
+        val SURFACE_SOFT = Glass.PANEL_FILL
+        val BORDER_SUBTLE = Glass.BORDER
+        val BORDER_PROMINENT = Glass.BORDER_BRIGHT
+        val TEXT_PRIMARY = Glass.TEXT_PRIMARY
+        val TEXT_SECONDARY = Glass.TEXT_SECONDARY
+        val TEXT_MUTED = Glass.TEXT_MUTED
+        val ACCENT_BLUE = Glass.SKY
+        val ACCENT_GREEN = Glass.EMERALD
+        val ACCENT_AMBER = Glass.AMBER
+        val ACCENT_RED = Glass.RED
+        val ACCENT_WARM_GOLD = Glass.TEAL
     }
 }

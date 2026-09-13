@@ -49,7 +49,8 @@ class LiveNavigationRecorder(private val context: Context) {
                 "cal_gyro_bias_rads,cal_yaw_channel,cal_yaw_scale," +
                 "cal_forward_corr,cal_yaw_corr,test_phase,test_elapsed_s," +
                 "test_withheld_fixes,reference_east_m,reference_north_m," +
-                "reference_error_m,stationary_hold,sensor_interruptions"
+                "reference_error_m,stationary_hold,sensor_interruptions," +
+                "route_assist_status,route_assist_lat,route_assist_lon,route_progress_m,route_assist_uncertainty_m"
     }
 
     private val sessionId = System.currentTimeMillis()
@@ -109,6 +110,7 @@ class LiveNavigationRecorder(private val context: Context) {
     fun recordState(
         state: Navigator.State,
         blackoutTest: FieldBlackoutSnapshot = FieldBlackoutSnapshot(),
+        routeAssistance: RouteConstraint.Result? = null,
     ) {
         if (!running) return
         val dt = if (lastStateT.isFinite()) maxOf(state.t - lastStateT, 0.0) else 0.0
@@ -180,6 +182,11 @@ class LiveNavigationRecorder(private val context: Context) {
             fmt(blackoutTest.referenceErrorM),
             state.stationaryHoldActive.toString(),
             state.sensorInterruptions.toString(),
+            routeAssistance?.status ?: "OFF",
+            fmt(routeAssistance?.point?.lat),
+            fmt(routeAssistance?.point?.lon),
+            fmt(routeAssistance?.progressM),
+            fmt(routeAssistance?.uncertaintyM),
         ).joinToString(","))
 
         states++

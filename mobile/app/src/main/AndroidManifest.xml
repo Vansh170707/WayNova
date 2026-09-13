@@ -15,6 +15,12 @@
         android:icon="@drawable/ic_waynova"
         android:supportsRtl="true"
         android:theme="@android:style/Theme.Material.Light">
+        <provider android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.evidence"
+            android:exported="false" android:grantUriPermissions="true">
+            <meta-data android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/evidence_paths" />
+        </provider>
         <meta-data
             android:name="com.google.android.geo.API_KEY"
             android:value="${MAPS_API_KEY}" />
@@ -31,6 +37,24 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <activity
+            android:name=".TripsActivity"
+            android:exported="false"
+            android:label="Waynova trips"
+            android:theme="@style/Theme.NeuroNavX.Navigation"
+            android:screenOrientation="portrait" />
+        <activity
+            android:name=".DiagnosticsActivity"
+            android:exported="false"
+            android:label="Waynova diagnostics"
+            android:theme="@style/Theme.NeuroNavX.Navigation"
+            android:screenOrientation="portrait" />
+        <activity
+            android:name=".SettingsActivity"
+            android:exported="false"
+            android:label="Waynova settings"
+            android:theme="@style/Theme.NeuroNavX.Navigation"
+            android:screenOrientation="portrait" />
         <activity android:name=".MainActivity" android:exported="false"
             android:label="Waynova developer tools" android:screenOrientation="portrait" />
         <activity

@@ -23,6 +23,7 @@ class AvionicsVoiceCoPilot(context: Context) : TextToSpeech.OnInitListener {
     private var lastSpokenCue = ""
     private var lastSpokenTimeMs = 0L
     private val minRepeatIntervalMs = 6000L
+    private var lastSpeechWasRoute = false
 
     init {
         try {
@@ -55,19 +56,24 @@ class AvionicsVoiceCoPilot(context: Context) : TextToSpeech.OnInitListener {
      * @param flush If true, interrupts any ongoing queue to deliver immediate warning.
      * @param forceIfRecent If true, bypasses the deduplication throttle.
      */
-    fun speak(text: String, flush: Boolean = false, forceIfRecent: Boolean = false) {
-        if (isMuted || !isReady || text.isBlank()) return
+    fun speak(text: String, flush: Boolean = false, forceIfRecent: Boolean = false, routeCue: Boolean = false): Boolean {
+        if (isMuted || !isReady || text.isBlank()) return false
         val now = System.currentTimeMillis()
         if (!forceIfRecent && text == lastSpokenCue && (now - lastSpokenTimeMs) < minRepeatIntervalMs) {
-            return
+            return false
         }
 
         lastSpokenCue = text
         lastSpokenTimeMs = now
 
         val queueMode = if (flush) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD
-        tts?.speak(text, queueMode, null, "WAYNOVA_COPILOT_${now}")
+        val accepted = tts?.speak(text, queueMode, null, "WAYNOVA_COPILOT_${now}") == TextToSpeech.SUCCESS
+        if (accepted) lastSpeechWasRoute = routeCue
+        return accepted
     }
+
+    fun stopSpeaking() { tts?.stop(); lastSpeechWasRoute = false }
+    fun stopRouteSpeech() { if (lastSpeechWasRoute) stopSpeaking() }
 
     fun onMissionStart() {
         speak("Waynova navigation online. Inertial neural filter calibrated at 100 Hertz.", flush = true)

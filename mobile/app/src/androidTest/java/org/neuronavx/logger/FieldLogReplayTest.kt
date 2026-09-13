@@ -20,9 +20,8 @@ class FieldLogReplayTest {
         assumeTrue("Supply fieldReplay=true and private fixtures to run field replay",
             args.getString("fieldReplay") == "true")
         val context = InstrumentationRegistry.getInstrumentation().targetContext
-        // Internal storage first, then the app's external files directory. `run-as` is
-        // unreliable on some vendor builds and a test reinstall wipes internal storage, so
-        // the external location is the one that can actually be loaded and reloaded.
+        // The emulator-only runner writes internal fixtures as the app user. Keep the
+        // external lookup for older emulator fixtures; never run this on the field phone.
         val candidates = listOfNotNull(
             File(context.filesDir, "phase16-replay"),
             context.getExternalFilesDir(null)?.let { File(it, "phase16-replay") },
@@ -31,8 +30,13 @@ class FieldLogReplayTest {
             d.listFiles()?.any { it.name.startsWith("nav_summary_") } == true
         }
         checkNotNull(dir) { "Private fixtures missing in ${candidates.joinToString()}" }
+        val requestedIds = args.getString("fieldSessionIds")?.split(',')?.toSet()
+        requestedIds?.forEach { require(it.matches(Regex("[0-9]+"))) }
         val summaries = checkNotNull(dir.listFiles()) { "Private fixtures missing in $dir" }
-            .filter { it.name.startsWith("nav_summary_") }.sortedBy { it.name }
+            .filter { it.name.startsWith("nav_summary_") &&
+                (requestedIds == null || it.name.removePrefix("nav_summary_").removeSuffix(".json") in requestedIds) }
+            .sortedBy { it.name }
+        if (requestedIds != null) assertTrue("Requested fixtures are missing", summaries.size == requestedIds.size)
         assertTrue(summaries.isNotEmpty())
         val reports = JSONArray()
         val runtime = RuntimeConfig.fromAsset(context)
@@ -103,9 +107,7 @@ class FieldLogReplayTest {
             }
         }
         File(dir,"replay_results.json").writeText(reports.toString(2))
-        // Also write where a plain `adb shell cat` can reach it. `run-as` is unreliable on
-        // some vendor builds (this vivo returns "packagelist_parse failed" intermittently),
-        // and an unreadable result makes the harness useless exactly when it is needed.
+        // Export emulator results for adb pull, leaving the fixture originals intact.
         context.getExternalFilesDir(null)?.let {
             File(it, "replay_results.json").writeText(reports.toString(2))
         }

@@ -36,29 +36,29 @@ class NavigationView @JvmOverloads constructor(
 ) : View(context, attrs) {
 
     private val estimatePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE; strokeWidth = 2f; color = Color.parseColor("#664C9BFF")
+        style = Paint.Style.STROKE; strokeWidth = 2f; color = Color.parseColor("#662DD4BF")
         strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND
     }
     private val displayPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE; strokeWidth = 7f; color = Color.parseColor("#58A6FF")
+        style = Paint.Style.STROKE; strokeWidth = 7f; color = Color.parseColor("#2DD4BF")
         strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND
     }
     private val darkPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE; strokeWidth = 7f; color = Color.parseColor("#FF9F4A")
+        style = Paint.Style.STROKE; strokeWidth = 7f; color = Color.parseColor("#FF4D5E")
         strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND
     }
     private val trackGlowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE; strokeWidth = 17f; color = Color.parseColor("#254C9BFF")
+        style = Paint.Style.STROKE; strokeWidth = 17f; color = Color.parseColor("#252DD4BF")
         strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND
     }
     private val confidencePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.FILL; color = Color.parseColor("#2E4C9BFF")
+        style = Paint.Style.FILL; color = Color.parseColor("#2E2DD4BF")
     }
     private val confidenceOutlinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE; strokeWidth = 2f; color = Color.parseColor("#884C9BFF")
+        style = Paint.Style.STROKE; strokeWidth = 2f; color = Color.parseColor("#882DD4BF")
     }
     private val markerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.FILL; color = Color.parseColor("#4C9BFF")
+        style = Paint.Style.FILL; color = Color.parseColor("#2DD4BF")
     }
     private val markerOutlinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE; strokeWidth = 5f; color = Color.WHITE
@@ -226,10 +226,10 @@ class NavigationView @JvmOverloads constructor(
         if (markerE.isFinite() && markerN.isFinite()) {
             val px = sx(markerE); val py = sy(markerN)
             val r = (sigmaM / metresPerPixel).toFloat()
-            confidencePaint.color = if (inOutage) Color.parseColor("#30FF9F4A")
-                else Color.parseColor("#2E4C9BFF")
-            confidenceOutlinePaint.color = if (inOutage) Color.parseColor("#99FF9F4A")
-                else Color.parseColor("#884C9BFF")
+            confidencePaint.color = if (inOutage) Color.parseColor("#30FF4D5E")
+                else Color.parseColor("#2E2DD4BF")
+            confidenceOutlinePaint.color = if (inOutage) Color.parseColor("#99FF4D5E")
+                else Color.parseColor("#882DD4BF")
             if (r > 1f) {
                 canvas.drawCircle(px, py, r, confidencePaint)
                 canvas.drawCircle(px, py, r, confidenceOutlinePaint)
@@ -290,8 +290,8 @@ class NavigationView @JvmOverloads constructor(
                    py - hx * size * 0.55f - hy * size * 0.5f)
             close()
         }
-        markerPaint.color = if (inOutage) Color.parseColor("#FF9F4A")
-                            else Color.parseColor("#4C9BFF")
+        markerPaint.color = if (inOutage) Color.parseColor("#FF4D5E")
+                            else Color.parseColor("#2DD4BF")
         canvas.drawPath(path, markerOutlinePaint)
         canvas.drawPath(path, markerPaint)
         canvas.drawCircle(px, py, 4f, markerOutlinePaint)

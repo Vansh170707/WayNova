@@ -60,3 +60,13 @@ secrets {
     propertiesFileName = "local.properties"
     defaultPropertiesFileName = "local.defaults.properties"
 }
+
+// Connected-test cleanup previously uninstalled the field app on a physical phone.
+// Use explicit emulator-only install + instrumentation, without AGP cleanup.
+tasks.configureEach {
+    if (name.startsWith("connected") && name.endsWith("AndroidTest")) {
+        doFirst {
+            throw GradleException("Connected test tasks are disabled to protect field recordings. Use: bash mobile/test_emulator.sh emulator-5554")
+        }
+    }
+}

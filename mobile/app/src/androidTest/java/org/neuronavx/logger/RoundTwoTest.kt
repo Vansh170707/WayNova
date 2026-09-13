@@ -14,6 +14,24 @@ import org.neuronavx.logger.nav.*
 
 @RunWith(AndroidJUnit4::class)
 class RoundTwoTest {
+    @Test fun navigationNeverAttachesCanvasAndProvidesRouteBackAction() {
+        ActivityScenario.launch(NavigationActivity::class.java).use { scenario ->
+            scenario.onActivity { activity ->
+                fun descendants(view: View): List<View> = listOf(view) +
+                    if (view is ViewGroup) (0 until view.childCount).flatMap {
+                        descendants(view.getChildAt(it))
+                    } else emptyList()
+                val views = descendants(activity.window.decorView)
+                assertFalse("Canvas must not be a navigation surface", views.any { it is NavigationView })
+                assertTrue(views.any { it.contentDescription == "Back: choose another route or dashboard" })
+                NavigationActivity::class.java.getDeclaredMethod("showLocalFallback").apply {
+                    isAccessible = true
+                }.invoke(activity)
+                assertFalse(descendants(activity.window.decorView).any { it is NavigationView })
+            }
+        }
+    }
+
     @Test fun optionalPlaceSearchSmokeTest() {
         org.junit.Assume.assumeTrue(InstrumentationRegistry.getArguments().getString("routingOnline") == "true")
         val context = InstrumentationRegistry.getInstrumentation().targetContext
@@ -98,9 +116,13 @@ class RoundTwoTest {
                     (if (view is TextView) listOf(view.text.toString()) else emptyList()) +
                         (if (view is ViewGroup) (0 until view.childCount).flatMap { labels(view.getChildAt(it)) } else emptyList())
                 val labels = labels(activity.window.decorView)
-                assertTrue(labels.contains("WAYNOVA"))
-                assertTrue(labels.contains("Open live navigation  →"))
-                assertTrue(labels.contains("Watch the recorded demo"))
+                assertTrue(labels.contains("WayNova"))
+                // The two launch paths the demo depends on, plus the tabs that reach the
+                // rest of the app. Wording may change; both routes must stay reachable.
+                assertTrue(labels.contains("Start Drive"))
+                assertTrue(labels.contains("Replay Route"))
+                assertTrue(labels.contains("Trips"))
+                assertTrue(labels.contains("Settings"))
             }
         }
     }

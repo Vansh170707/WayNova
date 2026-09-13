@@ -17,7 +17,7 @@ data class RoutePoint(val lat: Double, val lon: Double) {
     }
 }
 
-data class RouteStep(val instruction: String, val distanceM: Double)
+data class RouteStep(val instruction: String, val distanceM: Double, val maneuverPoint: RoutePoint? = null)
 
 /** A planned road route is never fed into the estimator or used as its reference truth. */
 data class RoutePlan(val destination: String, val points: List<RoutePoint>, val steps: List<RouteStep>,
@@ -27,7 +27,9 @@ data class RoutePlan(val destination: String, val points: List<RoutePoint>, val 
         put("saved_at", savedAt)
         put("points", JSONArray().apply { points.forEach { put(JSONArray().put(it.lon).put(it.lat)) } })
         put("steps", JSONArray().apply { steps.forEach {
-            put(JSONObject().put("instruction", it.instruction).put("distance_m", it.distanceM))
+            put(JSONObject().put("instruction", it.instruction).put("distance_m", it.distanceM).apply {
+                it.maneuverPoint?.let { p -> put("maneuver", JSONArray().put(p.lon).put(p.lat)) }
+            })
         } })
     }
     companion object {
@@ -46,7 +48,9 @@ data class RoutePlan(val destination: String, val points: List<RoutePoint>, val 
             require(steps.length() in 1..2000)
             return RoutePlan(json.getString("destination"), coordinates(json.getJSONArray("points")),
                 (0 until steps.length()).map { steps.getJSONObject(it).let { step ->
-                    RouteStep(step.getString("instruction"), validNumber(step.getDouble("distance_m")))
+                    val p = step.optJSONArray("maneuver")
+                    RouteStep(step.getString("instruction"), validNumber(step.getDouble("distance_m")),
+                        p?.let { RoutePoint(it.getDouble(1), it.getDouble(0)) })
                 } }, validNumber(json.getDouble("distance_m")), validNumber(json.getDouble("duration_s")),
                 json.getLong("saved_at"))
         }
@@ -77,8 +81,10 @@ data class RoutePlan(val destination: String, val points: List<RoutePoint>, val 
                         else -> type.replaceFirstChar { it.uppercase() } + " " + modifier
                     }
                     val road = step.optString("name").take(160)
+                    val p = maneuver.optJSONArray("location")
                     steps += RouteStep(instruction.trim() + if (road.isNotBlank()) " · $road" else "",
-                        validNumber(step.getDouble("distance")))
+                        validNumber(step.getDouble("distance")),
+                        p?.let { RoutePoint(it.getDouble(1), it.getDouble(0)) })
                 }
             }
             require(steps.size in 1..2000)

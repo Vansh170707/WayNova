@@ -79,8 +79,8 @@ class GoogleMapRenderer(
     private var uncertainty: Circle? = null
     private var vehicle: Marker? = null
     private var markerIsDark = false
-    private val aidedIcon by lazy { vehicleIcon(Color.parseColor("#4C9BFF")) }
-    private val deniedIcon by lazy { vehicleIcon(Color.parseColor("#FF9F4A")) }
+    private val aidedIcon by lazy { vehicleIcon(Color.parseColor("#2DD4BF")) }
+    private val deniedIcon by lazy { vehicleIcon(Color.parseColor("#FF4D5E")) }
 
     fun onCreate(savedState: Bundle?) {
         view.onCreate(savedState)
@@ -149,7 +149,7 @@ class GoogleMapRenderer(
         val line = rawEstimate ?: map.addPolyline(
             PolylineOptions()
                 .width(2.5f)
-                .color(Color.parseColor("#804C9BFF"))
+                .color(Color.parseColor("#802DD4BF"))
                 .zIndex(2f)
                 .geodesic(false)
         ).also { rawEstimate = it }
@@ -371,8 +371,8 @@ class GoogleMapRenderer(
         private const val CAMERA_PERIOD_MS = 450L
         private const val NAVIGATION_ZOOM = 17.4f
         private const val NAVIGATION_TILT = 48f
-        private val AIDED_COLOR = Color.parseColor("#4C9BFF")
-        private val DENIED_COLOR = Color.parseColor("#FF9F4A")
+        private val AIDED_COLOR = Color.parseColor("#2DD4BF")
+        private val DENIED_COLOR = Color.parseColor("#FF4D5E")
 
         fun playServicesAvailable(context: Context): Boolean =
             GoogleApiAvailability.getInstance().isGooglePlayServicesAvailable(context) ==

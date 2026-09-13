@@ -9,6 +9,18 @@ import org.neuronavx.logger.nav.*
 
 @RunWith(AndroidJUnit4::class)
 class LiveRobustnessTest {
+    @Test fun invalidBiasDoesNotKeepTightCalibrationConfidence() {
+        val adapter = LiveSpeedAdapter()
+        repeat(5) { i ->
+            adapter.observeTrustedSpeed(i.toDouble(), 3.0, 3.0)
+            adapter.observeAidedPrediction(SpeedEstimate(13.0, 1.0), 3.0, 3.0)
+        }
+        val invalid = adapter.adapt(5.0, SpeedEstimate(2.0, 1.0))
+        assertTrue(invalid.sigma >= 6.0)
+        assertTrue(invalid.speed >= 0.0)
+        val normal = adapter.adapt(6.0, SpeedEstimate(13.0, 1.0))
+        assertEquals(1.0, normal.sigma, 1e-9)
+    }
     private val gravity = doubleArrayOf(0.0, 0.0, 9.80665)
     private val zero = DoubleArray(3)
 

@@ -47,6 +47,14 @@ class LiveSource(
     private var startNanos = 0L
     private var recorder: LiveNavigationRecorder? = null
     private val fieldBlackoutTest = FieldBlackoutTest()
+    private var routeConstraint: RouteConstraint? = null
+    var routeAssistance: RouteConstraint.Result? = null
+        private set
+
+    fun setRoute(route: RoutePlan?) {
+        routeConstraint = route?.let { RouteConstraint(RouteGuidance(it)) }
+        routeAssistance = null
+    }
 
     var lastSummary: LiveSessionSummary? = null
         private set
@@ -132,7 +140,20 @@ class LiveSource(
                 val fix = if (withhold) null else timedFix?.fix
                 navigator.addSample(t, accel, gravity, gyro, fix)?.let { state ->
                     fieldBlackoutTest.observeState(state)
-                    recorder?.recordState(state, fieldBlackoutTest.snapshot(state.t))
+                    val test = fieldBlackoutTest.snapshot(state.t)
+                    val point = runCatching {
+                        EnuMapProjection.toLatLng(navigator.originLat,navigator.originLon,state.east,state.north)
+                            .let { RoutePoint(it.latitude,it.longitude) }
+                    }.getOrNull()
+                    if (state.phase != Navigator.Phase.NAVIGATING || point == null) {
+                        routeConstraint?.reset()
+                        routeAssistance = routeConstraint?.let { RouteConstraint.Result("NO_ANCHOR") }
+                    } else {
+                        routeAssistance = routeConstraint?.update(state.t,point,state.speed,state.heading,state.sigmaM,
+                            aided = state.mode == NavMode.AIDED && state.gnssFixAgeS in 0.0..1.5 && test.phase != FieldBlackoutPhase.WITHHOLDING,
+                            recovering = state.mode == NavMode.REACQUIRING)
+                    }
+                    recorder?.recordState(state, test, routeAssistance)
                     onState(state)
                 }
             }
