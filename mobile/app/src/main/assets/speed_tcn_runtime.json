@@ -1,6 +1,6 @@
 {
-  "checkpoint": "speed_tcn_holdout_B.pt",
-  "held_out_driver": "B",
+  "checkpoint": "speed_tcn_own_device_balanced.pt",
+  "held_out_driver": "1789275278630_seg00",
   "features": [
     "a_forward",
     "a_lateral",
@@ -34,13 +34,19 @@
     "offset": 0.0
   },
   "metrics": {
-    "rmse": 3.2282557487487793,
-    "mae": 2.287869691848755,
-    "corr": 0.8308451382489498,
-    "z_std": 1.490020513534546,
-    "mean_sigma": 2.631601095199585,
-    "z_std_after_calibration": 1.060249804095677,
-    "skill": 0.45486814207204995,
-    "naive_rmse": 5.921972274780273
+    "rmse": 2.251086711883545,
+    "mae": 1.8898206949234009,
+    "bias": -0.3554690182209015,
+    "corr": 0.5483179353075395,
+    "slope": 0.32819793532273983,
+    "offset": 4.85804633799131,
+    "mean_sigma": 1.445966362953186,
+    "z_std": 1.7324011325836182,
+    "distance_error_60s_m": -21.328140258789062,
+    "true_speed_mean": 7.760493755340576,
+    "n": 223.0,
+    "moving_speed": 2.0,
+    "z_std_after_calibration": 0.8365762647858654,
+    "naive_rmse": 3.9765939712524414
   }
 }
