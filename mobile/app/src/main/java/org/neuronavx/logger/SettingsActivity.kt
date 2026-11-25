@@ -218,6 +218,11 @@ class SettingsActivity : ComponentActivity() {
             Prefs.voiceEnabled(this@SettingsActivity),
         ) { Prefs.setVoiceEnabled(this@SettingsActivity, it) })
         addView(divider())
+        addView(toggleRow(
+            "Road lock", "Pull the map marker back onto the road when the estimate drifts off it",
+            Prefs.roadLock(this@SettingsActivity),
+        ) { Prefs.setRoadLock(this@SettingsActivity, it) })
+        addView(divider())
         addView(linkRow("Plan a destination", "Search and cache an OSRM route") {
             startActivity(Intent(this@SettingsActivity, NavigationActivity::class.java)
                 .putExtra("plan_route", true))

@@ -17,6 +17,7 @@ object Prefs {
     private const val KEY_KEEP_AWAKE = "keep_screen_on"
     private const val KEY_HAPTICS = "haptics"
     private const val KEY_VOICE = "voice_enabled"
+    private const val KEY_ROAD_LOCK = "road_lock"
 
     private fun store(context: Context): SharedPreferences =
         context.applicationContext.getSharedPreferences(FILE, Context.MODE_PRIVATE)
@@ -43,6 +44,12 @@ object Prefs {
 
     fun setVoiceEnabled(context: Context, value: Boolean) =
         store(context).edit().putBoolean(KEY_VOICE, value).apply()
+
+    /** Keep the displayed marker on the nearest road. Display only; never alters the estimate. */
+    fun roadLock(context: Context): Boolean = store(context).getBoolean(KEY_ROAD_LOCK, true)
+
+    fun setRoadLock(context: Context, value: Boolean) =
+        store(context).edit().putBoolean(KEY_ROAD_LOCK, value).apply()
 
     // -- Unit helpers -------------------------------------------------------------
 

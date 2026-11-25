@@ -48,6 +48,9 @@ import org.neuronavx.logger.nav.SpeedModel
 import org.neuronavx.logger.nav.RoutePlan
 import org.neuronavx.logger.nav.RoutePoint
 import org.neuronavx.logger.nav.RouteGuidance
+import org.neuronavx.logger.nav.RoadLine
+import org.neuronavx.logger.nav.RoadSnapper
+import org.neuronavx.logger.nav.DemoRide
 import org.neuronavx.logger.nav.TurnCuePlanner
 import org.neuronavx.logger.nav.EnuMapProjection
 import org.neuronavx.logger.nav.AvionicsVoiceCoPilot
@@ -120,6 +123,10 @@ class NavigationActivity : ComponentActivity() {
     private var activityResumed = false
     private var preparingOfflineMap = false
     private var latestMapSnapshot: NavigationMapSnapshot? = null
+    private val roadSnapper = RoadSnapper()
+    private var roadSnapSession: Any? = null
+    private var roadSnapRoads: List<RoadLine>? = null
+    private var roadLockStatus: RoadSnapper.Status? = null
     private var model: SpeedModel? = null
     private var live: LiveSource? = null
     @Volatile private var replayThread: Thread? = null
@@ -646,6 +653,13 @@ class NavigationActivity : ComponentActivity() {
                     performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
                     onSecondaryAction()
                 }
+                // The original recorded-data demo (real estimator, outside offline map coverage).
+                setOnLongClickListener {
+                    if (live != null || replayThread != null) return@setOnLongClickListener false
+                    performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                    onRecordedReplay()
+                    true
+                }
             }
             actions.addView(liveButton, LinearLayout.LayoutParams(0, dp(50), 1f))
             actions.addView(Space(this@NavigationActivity), LinearLayout.LayoutParams(dp(10), 1))
@@ -808,8 +822,17 @@ class NavigationActivity : ComponentActivity() {
         val snapshot = latestMapSnapshot
         val outside = snapshot != null && org.neuronavx.logger.nav.offlineMapMarkerOrNull(snapshot) != null &&
             mapLibreRenderer?.covers(snapshot) == false
-        mapSourceBadge.text = if (outside) "NO OFFLINE COVERAGE" else "OFFLINE GN"
-        mapSourceBadge.setTextColor(if (outside) ACCENT_AMBER else ACCENT_GREEN)
+        val lock = when (roadLockStatus) {
+            RoadSnapper.Status.ON_ROAD -> " · ROAD LOCK"
+            RoadSnapper.Status.CORRECTING -> " · SNAPPING TO ROAD"
+            else -> ""
+        }
+        mapSourceBadge.text = if (outside) "NO OFFLINE COVERAGE" else "OFFLINE GN$lock"
+        mapSourceBadge.setTextColor(when {
+            outside -> ACCENT_AMBER
+            roadLockStatus == RoadSnapper.Status.CORRECTING -> ACCENT_AMBER
+            else -> ACCENT_GREEN
+        })
     }
 
     private fun refreshMapAttribution() {
@@ -975,6 +998,11 @@ class NavigationActivity : ComponentActivity() {
             showPausedState("Demo paused", "The estimated track remains visible on the map.")
             return
         }
+        startDemoRide()
+    }
+
+    /** Recorded IO-VNBD log through the real estimator. Outside the offline map's coverage. */
+    private fun onRecordedReplay() {
         stopLive()
         announcedMissionStart = false
         prevNavMode = NavMode.AIDED
@@ -1042,6 +1070,126 @@ class NavigationActivity : ComponentActivity() {
         replayThread = null
         setActions(replayRunning = false, liveRunning = false)
     }
+
+    /**
+     * Simulated demo ride on a bundled OSRM route in Greater Noida, inside offline map
+     * coverage. Not a recording and not an estimator run: the UI says so throughout.
+     */
+    private fun startDemoRide() {
+        stopLive()
+        stopReplay()
+        val generation = savedReplayGeneration
+        stopRequested = false
+        failure = null
+        navigator = null
+        viewingSavedRide = false
+        map.clear()
+        googleMapRenderer?.clear()
+        mapLibreRenderer?.clear()
+        if (mapLibreReady && !mapLibreActive) showMapLibreBasemap()
+        setActions(replayRunning = true, liveRunning = false)
+        routeButton.text = "SIMULATED DEMO RIDE · NOT A RECORDING"
+        showStartingState("DEMO RIDE", "Loading the Greater Noida demo route…")
+        val session = Any()
+        replayThread = thread(name = "waynova-demo-ride") {
+            try {
+                val plan = RoutePlan.fromOsrm(assets.open(DemoRide.ASSET).bufferedReader().use { it.readText() },
+                    DemoRide.DESTINATION)
+                val ride = DemoRide(plan)
+                val frames = ride.frames()
+                val guidanceModel = RouteGuidance(plan)
+                val east = ArrayList<Double>(); val north = ArrayList<Double>(); val dark = ArrayList<Boolean>()
+                var routeShownOn: MapLibreOfflineRenderer? = null
+                var lastShown = Double.NEGATIVE_INFINITY
+                for ((index, frame) in frames.withIndex()) {
+                    if (stopRequested || generation != savedReplayGeneration) break
+                    if (index > 0) Thread.sleep(((frame.t - frames[index - 1].t) * 1000 / SPEED_FACTOR).toLong())
+                    east += frame.east; north += frame.north; dark += frame.mode != NavMode.AIDED
+                    if (frame.t - lastShown < 0.2 && index != frames.lastIndex) continue
+                    lastShown = frame.t
+                    val e = east.toDoubleArray(); val n = north.toDoubleArray(); val d = dark.toBooleanArray()
+                    val raw = NavigationMapSnapshot(ride.originLat, ride.originLon, e, n, e, n, d,
+                        frame.east, frame.north, frame.headingRad, frame.sigmaM, frame.mode != NavMode.AIDED)
+                    ui.post {
+                        if (isDestroyed || generation != savedReplayGeneration || stopRequested) return@post
+                        val renderer = mapLibreRenderer
+                        if (renderer != null && renderer !== routeShownOn) {
+                            renderer.setPlannedRoute(plan.points); routeShownOn = renderer
+                        }
+                        if (mapLibreReady && !mapLibreActive) showMapLibreBasemap()
+                        val snapshot = applyRoadLock(raw, session, frame.t, frame.speedMps)
+                        latestMapSnapshot = snapshot
+                        renderer?.submit(snapshot); googleMapRenderer?.submit(snapshot)
+                        showDemoFrame(frame, ride, plan, guidanceModel, snapshot)
+                    }
+                }
+                ui.post {
+                    if (!isDestroyed && generation == savedReplayGeneration && !stopRequested)
+                        showPausedState("Demo ride finished",
+                            "Simulated ride to ${DemoRide.DESTINATION}. Not a recording or an accuracy result.",
+                            "SIMULATED  •  ${"%.1f".format(ride.lengthM / 1000)} KM  •  ROUTE: OSRM · © OPENSTREETMAP")
+                }
+            } catch (error: Exception) {
+                android.util.Log.e("Waynova", "demo ride failed", error)
+                ui.post { if (!isDestroyed && generation == savedReplayGeneration && !stopRequested)
+                    showFailure(error.message ?: "Could not start the demo ride") }
+            } finally {
+                ui.post { if (!isDestroyed && generation == savedReplayGeneration) {
+                    replayThread = null
+                    setActions(replayRunning = false, liveRunning = false)
+                } }
+            }
+        }
+    }
+
+    private fun showDemoFrame(frame: DemoRide.Frame, ride: DemoRide, plan: RoutePlan,
+        guidanceModel: RouteGuidance, shown: NavigationMapSnapshot) {
+        val modeColor = when (frame.mode) {
+            NavMode.AIDED -> ACCENT_GREEN
+            NavMode.BLACKOUT -> ACCENT_AMBER
+            NavMode.REACQUIRING -> ACCENT_BLUE
+        }
+        setMode("DEMO · ${frame.mode}", modeColor)
+        eyebrow.text = "SIMULATED DEMO RIDE · 4× · NOT A RECORDING"
+        eyebrow.setTextColor(ACCENT_AMBER)
+        val point = EnuMapProjection.toLatLng(ride.originLat, ride.originLon, shown.markerEast, shown.markerNorth)
+        val step = guidanceModel.update(RoutePoint(point.latitude, point.longitude),
+            reliable = frame.mode == NavMode.AIDED, sigmaM = frame.sigmaM, fixAgeS = 0.0,
+            headingRad = frame.headingRad, speedMps = frame.speedMps)
+        when {
+            frame.mode == NavMode.BLACKOUT -> {
+                headline.text = "GPS lost · dead reckoning"
+                guidance.text = "Simulated GPS loss. The estimate drifts; road lock keeps the marker on the road."
+            }
+            frame.mode == NavMode.REACQUIRING -> {
+                headline.text = "GPS back · re-converging"
+                guidance.text = "Simulated recovery: the estimate eases back instead of jumping."
+            }
+            step.status == RouteGuidance.Status.READY -> {
+                headline.text = step.instruction
+                guidance.text = "In ${formatDistance(step.distanceM)} · ${formatDistance(step.remainingM)} to ${DemoRide.DESTINATION}"
+            }
+            step.status == RouteGuidance.Status.NEAR_DESTINATION -> {
+                headline.text = "Arriving at ${DemoRide.DESTINATION}"
+                guidance.text = "Simulated demo ride from ${DemoRide.START_LABEL}."
+            }
+            else -> {
+                headline.text = "Driving to ${DemoRide.DESTINATION}"
+                guidance.text = "Simulated demo ride from ${DemoRide.START_LABEL}."
+            }
+        }
+        val elapsed = frame.t
+        val total = ride.lengthM
+        contextLine.text = "%.1f / %.1f KM  •  %d:%02d  •  ROUTE: OSRM · © OPENSTREETMAP".format(
+            frame.progressM / 1000, total / 1000, (elapsed / 60).toInt(), (elapsed % 60).toInt())
+        setMetric(speedMetric, "%.0f".format(Prefs.speedInPreferredUnit(this, frame.speedMps)), Prefs.speedLabel(this))
+        setMetric(headingMetric, "%.0f".format((Math.toDegrees(shown.headingRad) + 360) % 360), "DEG")
+        setMetric(uncertaintyMetric, "%.1f".format(frame.sigmaM), "M 1σ")
+        calibrationProgress.visibility = View.GONE
+    }
+
+    private fun formatDistance(m: Double): String =
+        if (m >= 1000) "%.1f km".format(m / 1000) else "${(m / 10).roundToInt() * 10} m"
 
     private fun startSavedRide(id: Long) {
         stopReplay()
@@ -1135,7 +1283,10 @@ class NavigationActivity : ComponentActivity() {
         announcedMissionStart = false
         prevNavMode = NavMode.AIDED
         prevSentinelState = SentinelState.NOMINAL
-        plannedRoute?.let { applyRoute(it, save = false) }
+        plannedRoute?.let { applyRoute(it, save = false) } ?: run {
+            // Do not leave the demo ride's route drawn under a live drive.
+            mapLibreRenderer?.setPlannedRoute(emptyList()); googleMapRenderer?.setPlannedRoute(emptyList())
+        }
         try {
             val runtime = RuntimeConfig.fromAsset(this)
             val speed = SpeedModel(this, runtime).also { model = it }
@@ -1230,11 +1381,14 @@ class NavigationActivity : ComponentActivity() {
                 inOutage = state.mode != NavMode.AIDED,
             )
             val assistedPoint = assistance?.point
-            val snapshot = if (assistedPoint != null) originalSnapshot.copy(
+            val estimateSnapshot = if (assistedPoint != null) originalSnapshot.copy(
                 markerEast = Math.toRadians(assistedPoint.lon-nav.originLon)*6378137.0*kotlin.math.cos(Math.toRadians(nav.originLat)),
                 markerNorth = Math.toRadians(assistedPoint.lat-nav.originLat)*6378137.0,
                 sigmaM = maxOf(state.sigmaM,assistance.uncertaintyM),
             ) else originalSnapshot
+            val snapshot = if (state.phase == Navigator.Phase.NAVIGATING)
+                applyRoadLock(estimateSnapshot, nav, state.t, state.speed)
+            else { roadSnapper.reset(); setRoadLockStatus(null); estimateSnapshot }
             latestMapSnapshot = snapshot
             googleMapRenderer?.submit(snapshot)
             mapLibreRenderer?.submit(snapshot)
@@ -1255,6 +1409,42 @@ class NavigationActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    /**
+     * Keep the displayed marker on the nearest plausible drivable road (offline map only).
+     * Display-only: Navigator, recordings and drift scoring keep the original estimate.
+     */
+    private fun applyRoadLock(
+        snapshot: NavigationMapSnapshot, session: Any, t: Double, speedMps: Double,
+    ): NavigationMapSnapshot {
+        val renderer = mapLibreRenderer
+        if (roadSnapSession !== session) {
+            roadSnapper.reset(); roadSnapSession = session; roadSnapRoads = null
+        }
+        if (!Prefs.roadLock(this) || !mapLibreActive || renderer == null) {
+            roadSnapper.reset(); setRoadLockStatus(null)
+            return snapshot
+        }
+        val marker = org.neuronavx.logger.nav.offlineMapMarkerOrNull(snapshot) ?: return snapshot
+        val roads = renderer.drivableRoadsNear(marker.latitude, marker.longitude)
+        if (roads !== roadSnapRoads) {
+            roadSnapper.setRoads(roads.orEmpty(), snapshot.originLat, snapshot.originLon)
+            roadSnapRoads = roads
+        }
+        val result = roadSnapper.update(t, snapshot.markerEast, snapshot.markerNorth,
+            snapshot.headingRad, speedMps, snapshot.sigmaM)
+        setRoadLockStatus(result.status)
+        // Released states still carry the easing-out correction, so the marker never jumps.
+        return if (result.correctionM > 0.0 || result.locked) snapshot.copy(
+            markerEast = result.east, markerNorth = result.north, headingRad = result.headingRad,
+        ) else snapshot
+    }
+
+    private fun setRoadLockStatus(status: RoadSnapper.Status?) {
+        if (status == roadLockStatus) return
+        roadLockStatus = status
+        updateOfflineCoverageBadge()
     }
 
     private fun updateRouteGuidance(s: Navigator.State) {

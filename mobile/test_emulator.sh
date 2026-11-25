@@ -33,6 +33,22 @@ if [[ "$test_class" == "org.neuronavx.logger.FieldLogReplayTest" ]]; then
     done
     result_log="$(mktemp -t waynova-instrumentation)"
     "$adb_bin" -s "$test_serial" shell am instrument -w -r -e class "$test_class" -e fieldReplay true -e fieldSessionIds "$session_ids" org.neuronavx.logger.test/androidx.test.runner.AndroidJUnitRunner | tee "$result_log"
+elif [[ "$test_class" == "org.neuronavx.logger.RoadHeadingReplayTest" ]]; then
+    fixture_dir="${3:?Supply a local directory containing backed-up nav_drive_*.csv files}"
+    [[ -d "$fixture_dir" ]] || exit 2
+    remote_dir="files/road-heading-replay"
+    "$adb_bin" -s "$test_serial" shell run-as org.neuronavx.logger mkdir -p "$remote_dir"
+    shopt -s nullglob
+    fixtures=("$fixture_dir"/nav_drive_*.csv)
+    ((${#fixtures[@]} > 0)) || { echo "No fixtures found" >&2; exit 2; }
+    for fixture in "${fixtures[@]}"; do
+        [[ "$(basename "$fixture")" =~ ^nav_drive_[0-9]+\.csv$ ]] || exit 2
+        "$adb_bin" -s "$test_serial" shell -T run-as org.neuronavx.logger tee "$remote_dir/$(basename "$fixture")" < "$fixture" > /dev/null
+    done
+    result_log="$(mktemp -t waynova-instrumentation)"
+    "$adb_bin" -s "$test_serial" shell am instrument -w -r -e class "$test_class" -e roadHeadingReplay true -e traceOnly "${ROAD_REPLAY_TRACE_ONLY:-false}" org.neuronavx.logger.test/androidx.test.runner.AndroidJUnitRunner | tee "$result_log"
+    "$adb_bin" -s "$test_serial" exec-out run-as org.neuronavx.logger cat "$remote_dir/road_heading_results.json" > "$fixture_dir/road_heading_results.json" || true
+    "$adb_bin" -s "$test_serial" exec-out run-as org.neuronavx.logger cat "$remote_dir/speed_trace.csv" > "$fixture_dir/speed_trace.csv" 2>/dev/null || true
 else
     result_log="$(mktemp -t waynova-instrumentation)"
     "$adb_bin" -s "$test_serial" shell am instrument -w -r -e class "$test_class" org.neuronavx.logger.test/androidx.test.runner.AndroidJUnitRunner | tee "$result_log"
