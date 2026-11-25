@@ -69,7 +69,7 @@ class SettingsActivity : ComponentActivity() {
         root.addView(buildAdvancedCard(), matchWrap(10, this))
 
         root.addView(textView(
-            "Waynova ${BuildConfig.VERSION_NAME} · ISRO SIH26168\nOffline basemap tiles © OpenStreetMap contributors, packaged by Protomaps.",
+            "Waynova ${BuildConfig.VERSION_NAME}\nOffline basemap tiles © OpenStreetMap contributors, packaged by Protomaps.",
             10f, Glass.TEXT_MUTED, lineMultiplier = 1.3f,
         ).apply { gravity = Gravity.CENTER_HORIZONTAL }, matchWrap(26, this))
 

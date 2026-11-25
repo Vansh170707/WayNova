@@ -6,7 +6,7 @@ import android.util.Log
 import java.util.Locale
 
 /**
- * Offline Avionics Voice Co-Pilot for Waynova (SIH26168).
+ * Offline Avionics Voice Co-Pilot for Waynova.
  *
  * Provides synthesized spoken telemetry during test drives and live GNSS blackouts,
  * operating 100% offline using Android's native Text-to-Speech engine with zero

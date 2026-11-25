@@ -107,7 +107,7 @@ object RouteClient {
             .openConnection() as HttpURLConnection
         try {
             connection.connectTimeout = 15000; connection.readTimeout = 20000
-            connection.setRequestProperty("User-Agent", "Waynova-SIH-Prototype/0.2 (Android; user-requested driving routes)")
+            connection.setRequestProperty("User-Agent", "Waynova/0.2 (Android; user-requested driving routes)")
             require(connection.responseCode == 200) { "Routing service unavailable (${connection.responseCode}). Try again later." }
             val body = connection.inputStream.bufferedReader().use { reader ->
                 val result = StringBuilder()
