@@ -31,7 +31,12 @@ import org.maplibre.android.style.layers.PropertyFactory.lineWidth
 import org.maplibre.android.style.layers.Property.LINE_CAP_ROUND
 import org.maplibre.android.style.layers.Property.LINE_JOIN_ROUND
 import org.maplibre.android.style.sources.GeoJsonSource
+import org.maplibre.android.style.sources.VectorSource
+import org.maplibre.geojson.LineString
+import org.maplibre.geojson.MultiLineString
+import android.os.SystemClock
 import java.io.File
+import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.sin
@@ -268,6 +273,60 @@ class MapLibreOfflineRenderer(
         lastCameraUpdateMs = now
     }
 
+    private var roadCache: List<RoadLine>? = null
+    private var roadCacheLat = Double.NaN
+    private var roadCacheLon = Double.NaN
+    private var roadCacheMs = 0L
+
+    /**
+     * Drivable road centrelines near a point, read from offline tiles MapLibre already loaded.
+     * Returns the same list instance until a refresh is due. Main thread only.
+     */
+    fun drivableRoadsNear(lat: Double, lon: Double): List<RoadLine>? {
+        if (!lat.isFinite() || !lon.isFinite()) return roadCache
+        val now = SystemClock.elapsedRealtime()
+        val cached = roadCache
+        val moved = if (roadCacheLat.isFinite()) approxDistanceM(lat, lon, roadCacheLat, roadCacheLon)
+            else Double.POSITIVE_INFINITY
+        if (cached != null && moved < ROAD_REFRESH_DISTANCE_M && now - roadCacheMs < ROAD_REFRESH_MS) return cached
+        val source = style?.getSourceAs<VectorSource>(BASEMAP_SOURCE) ?: return cached
+        val features = runCatching { source.querySourceFeatures(arrayOf(ROADS_LAYER), null) }
+            .getOrNull() ?: return cached
+        val dLat = Math.toDegrees(ROAD_QUERY_RADIUS_M / 6378137.0)
+        val dLon = dLat / cos(Math.toRadians(lat)).coerceAtLeast(1e-6)
+        val roads = ArrayList<RoadLine>()
+        for (feature in features) {
+            runCatching {
+                val kind = if (feature.hasProperty("kind")) feature.getStringProperty("kind") else null
+                if (kind !in DRIVABLE_KINDS) return@runCatching
+                val oneway = feature.hasProperty("oneway") && feature.getStringProperty("oneway") == "yes"
+                val lines = when (val g = feature.geometry()) {
+                    is LineString -> listOf(g.coordinates())
+                    is MultiLineString -> g.coordinates()
+                    else -> emptyList()
+                }
+                for (line in lines) {
+                    if (line.size < 2) continue
+                    val near = line.any { abs(it.latitude() - lat) <= dLat && abs(it.longitude() - lon) <= dLon }
+                    if (near) roads += RoadLine(line.map { RoutePoint(it.latitude(), it.longitude()) }, oneway, kind!!)
+                }
+            }
+        }
+        // Tiles around a fast-moving marker may still be loading; keep nearby old roads meanwhile.
+        if (roads.isEmpty() && cached != null && moved < ROAD_QUERY_RADIUS_M / 2) {
+            roadCacheMs = now
+            return cached
+        }
+        roadCache = roads; roadCacheLat = lat; roadCacheLon = lon; roadCacheMs = now
+        return roads
+    }
+
+    private fun approxDistanceM(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
+        val north = Math.toRadians(lat1 - lat2) * 6378137.0
+        val east = Math.toRadians(lon1 - lon2) * 6378137.0 * cos(Math.toRadians(lat2))
+        return kotlin.math.hypot(east, north)
+    }
+
     fun recenter() {
         following = true
         cameraInitialized = false
@@ -411,6 +470,13 @@ class MapLibreOfflineRenderer(
 
     private companion object {
         const val STYLE_ASSET = "offline_map/style.json"
+        const val BASEMAP_SOURCE = "protomaps"
+        const val ROADS_LAYER = "roads"
+        /** Protomaps road kinds a car can use; paths, rail, runways and piers are excluded. */
+        val DRIVABLE_KINDS = setOf("highway", "major_road", "minor_road")
+        const val ROAD_QUERY_RADIUS_M = 400.0
+        const val ROAD_REFRESH_DISTANCE_M = 120.0
+        const val ROAD_REFRESH_MS = 5000L
         const val SOUTH = 28.34
         const val WEST = 77.30
         const val NORTH = 28.68

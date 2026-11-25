@@ -147,7 +147,8 @@ class EsEkf(val config: Config = Config()) {
      * filter is a direct observation of one or two states, so passing indices avoids
      * building and multiplying a dense H.
      */
-    private fun apply(hIdx: IntArray, innovation: DoubleArray, r: Array<DoubleArray>): Boolean {
+    private fun apply(hIdx: IntArray, innovation: DoubleArray, r: Array<DoubleArray>,
+                      countRejection: Boolean = true, onlyStates: IntArray? = null): Boolean {
         val m = hIdx.size
         // S = H P H^T + R
         val s = Array(m) { i -> DoubleArray(m) { j -> p[hIdx[i]][hIdx[j]] + r[i][j] } }
@@ -156,7 +157,7 @@ class EsEkf(val config: Config = Config()) {
         var nis = 0.0
         for (i in 0 until m) for (j in 0 until m) nis += innovation[i] * sInv[i][j] * innovation[j]
         val gate = config.innovationGateSigma * config.innovationGateSigma * m
-        if (nis > gate) { rejected++; return false }
+        if (nis > gate) { if (countRejection) rejected++; return false }
 
         // K = P H^T S^-1   (P H^T is the columns of P selected by hIdx)
         val k = Array(N) { row -> DoubleArray(m) { col ->
@@ -164,6 +165,8 @@ class EsEkf(val config: Config = Config()) {
             for (j in 0 until m) acc += p[row][hIdx[j]] * sInv[j][col]
             acc
         } }
+        // Restricted (suboptimal) gain: Joseph form below keeps P consistent for any K.
+        if (onlyStates != null) for (row in 0 until N) if (row !in onlyStates) k[row].fill(0.0)
 
         for (row in 0 until N) {
             var d = 0.0
@@ -224,6 +227,17 @@ class EsEkf(val config: Config = Config()) {
             doubleArrayOf(Signals.wrapAngle(bearingRad - x[PSI])),
             arrayOf(doubleArrayOf(sigma * sigma)))
     }
+
+    /**
+     * Fuse the local road direction as a heading pseudo-measurement during GNSS loss.
+     *
+     * Gated like any update, but a rejection is not a rejected GNSS fix: it must not feed
+     * the multipath indicator or the divergence-recovery streak.
+     */
+    fun updateRoadHeading(headingRad: Double, sigmaRad: Double, headingOnly: Boolean = false): Boolean =
+        apply(intArrayOf(PSI), doubleArrayOf(Signals.wrapAngle(headingRad - x[PSI])),
+            arrayOf(doubleArrayOf(maxOf(sigmaRad, 1e-3).let { it * it })), countRejection = false,
+            onlyStates = if (headingOnly) intArrayOf(PSI) else null)
 
     /**
      * Fuse the neural speed estimate as a pseudo-measurement.

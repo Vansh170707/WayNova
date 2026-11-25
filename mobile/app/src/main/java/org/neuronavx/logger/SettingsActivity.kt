@@ -69,7 +69,7 @@ class SettingsActivity : ComponentActivity() {
         root.addView(buildAdvancedCard(), matchWrap(10, this))
 
         root.addView(textView(
-            "Waynova ${BuildConfig.VERSION_NAME} · ISRO SIH26168\nOffline basemap tiles © OpenStreetMap contributors, packaged by Protomaps.",
+            "Waynova ${BuildConfig.VERSION_NAME}\nOffline basemap tiles © OpenStreetMap contributors, packaged by Protomaps.",
             10f, Glass.TEXT_MUTED, lineMultiplier = 1.3f,
         ).apply { gravity = Gravity.CENTER_HORIZONTAL }, matchWrap(26, this))
 
@@ -217,6 +217,11 @@ class SettingsActivity : ComponentActivity() {
             "Voice co-pilot", "Offline spoken callouts for blackout and recovery",
             Prefs.voiceEnabled(this@SettingsActivity),
         ) { Prefs.setVoiceEnabled(this@SettingsActivity, it) })
+        addView(divider())
+        addView(toggleRow(
+            "Road lock", "Pull the map marker back onto the road when the estimate drifts off it",
+            Prefs.roadLock(this@SettingsActivity),
+        ) { Prefs.setRoadLock(this@SettingsActivity, it) })
         addView(divider())
         addView(linkRow("Plan a destination", "Search and cache an OSRM route") {
             startActivity(Intent(this@SettingsActivity, NavigationActivity::class.java)

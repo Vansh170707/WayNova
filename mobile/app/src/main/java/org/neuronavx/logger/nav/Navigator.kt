@@ -53,6 +53,8 @@ class Navigator(
     ekfConfig: EsEkf.Config = EsEkf.Config(),
     private val blackoutConfig: BlackoutConfig = BlackoutConfig(),
     private val inputRateHz: Double = runtime.rateHz,
+    /** Optional road-direction heading aid during GNSS loss; null keeps the original behaviour. */
+    private val roadHeadingAid: RoadHeadingAid? = null,
 ) {
 
     enum class Phase { CALIBRATING, NAVIGATING }
@@ -151,6 +153,12 @@ class Navigator(
     private var learned = SpeedEstimate(Double.NaN, Double.NaN)
     private var adaptedLearned = AdaptedSpeedEstimate(Double.NaN, Double.NaN)
     private val sentinel = NavSentinel()
+    /** Road-direction heading updates the filter accepted during GNSS loss. */
+    var roadHeadingUpdates = 0; private set
+    var lastRoadHeadingStatus: RoadHeadingAid.Status? = null; private set
+    private var lastYawRate = Double.NaN
+    /** ~1 s low-pass of yaw rate: 10 Hz gyro noise alone exceeded 3 deg/s while parked. */
+    private var smoothYawRate = Double.NaN
 
     /** ENU origin, taken from the first usable fix. */
     var originLat = Double.NaN; private set
@@ -209,6 +217,7 @@ class Navigator(
             adaptedLearned = AdaptedSpeedEstimate(Double.NaN, Double.NaN)
             nativeHeadingRate.reset(); window.reset(); liveSpeedAdapter.reset()
             stationaryHold.reset(); smoother.reset(); blackout.reset(t); sentinel.reset()
+            roadHeadingAid?.reset()
             trackEast.clear(); trackNorth.clear(); trackDark.clear()
             displayEastTrack.clear(); displayNorthTrack.clear()
         }
@@ -296,6 +305,9 @@ class Navigator(
                 HeadingRateSource.GRAVITY_PROJECTED -> projectedHeadingRate
             }
             ekf.propagate(dt, yawRate, forwardAccel)
+            lastYawRate = yawRate - (if (headingRateSource == HeadingRateSource.GRAVITY_PROJECTED) ekf.gyroBias else 0.0)
+            smoothYawRate = if (!smoothYawRate.isFinite()) lastYawRate
+                else smoothYawRate + (lastYawRate - smoothYawRate) * (dt / (1.0 + dt))
         }
         justInitialized = false
 
@@ -329,6 +341,19 @@ class Navigator(
         }
 
         if (holdStopped) ekf.updateZeroVelocity()
+
+        if (inOutage && roadHeadingAid != null && !holdStopped && dt > 0.0) {
+            val lat = originLat + Math.toDegrees(ekf.north / 6378137.0)
+            val lon = originLon + Math.toDegrees(ekf.east / (6378137.0 * cos(Math.toRadians(originLat))))
+            val yaw = if (roadHeadingAid.config.smoothYawRate) smoothYawRate else lastYawRate
+            val road = roadHeadingAid.evaluate(t, lat, lon, ekf.heading, ekf.speed, yaw, ekf.positionSigma)
+            lastRoadHeadingStatus = road.status
+            if (road.status == RoadHeadingAid.Status.ACCEPTED &&
+                ekf.updateRoadHeading(road.headingRad, road.sigmaRad, roadHeadingAid.config.headingOnly)) roadHeadingUpdates++
+        } else if (!inOutage) {
+            roadHeadingAid?.reset()
+            lastRoadHeadingStatus = null
+        }
 
         var east = Double.NaN; var north = Double.NaN
         var accuracy = Double.NaN

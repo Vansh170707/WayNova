@@ -65,7 +65,7 @@ class DashboardActivity : ComponentActivity() {
         root.addView(recentSlot, matchWrap(12, this))
 
         root.addView(textView(
-            "Build v${BuildConfig.VERSION_NAME} · ISRO SIH26168\nAll drift figures are benchmarked against the phone GPS reference.",
+            "Build v${BuildConfig.VERSION_NAME}\nAll drift figures are benchmarked against the phone GPS reference.",
             10f, Glass.TEXT_MUTED, lineMultiplier = 1.3f,
         ).apply { gravity = Gravity.CENTER_HORIZONTAL }, matchWrap(24, this))
 
